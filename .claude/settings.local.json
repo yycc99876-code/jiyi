@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(node *)",
+      "Bash(npx vite *)",
+      "Bash(curl -s http://localhost:5173)",
+      "Bash(curl -s http://localhost:3001/api/revision/rewrite -X POST -H \"Content-Type: application/json\" -d '{\"selectedText\":\"测试\",\"userInstruction\":\"更自然\"}')",
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(curl *)",
+      "Bash(tasklist)",
+      "Bash(npx -y ctx7@latest library dashscope \"speech recognition Paraformer\")",
+      "Bash(start *)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  }
+}

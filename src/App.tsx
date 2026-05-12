@@ -1,0 +1,723 @@
+import { EditorContent, useEditor } from '@tiptap/react'
+import type { Editor } from '@tiptap/react'
+import { BubbleMenu } from '@tiptap/react/menus'
+import StarterKit from '@tiptap/starter-kit'
+import Placeholder from '@tiptap/extension-placeholder'
+import { AnimatePresence, motion } from 'framer-motion'
+import { diffWords } from 'diff'
+import {
+  Check,
+  ChevronRight,
+  Clock3,
+  Download,
+  FileText,
+  Loader2,
+  Moon,
+  PenLine,
+  RotateCcw,
+  Sparkles,
+  Sun,
+  Upload,
+  Wand2,
+  X,
+} from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import RevisionPanel from './components/revision/RevisionPanel'
+import {
+  importFile,
+  exportTxt,
+  exportMarkdown,
+  exportDocx,
+  exportDoc,
+} from './services/file/fileService'
+
+type RevisionStatus = 'pending' | 'accepted' | 'ignored'
+
+type Issue = {
+  text: string
+  problem: string
+  suggestion: string
+}
+
+type Revision = {
+  id: string
+  original: string
+  replacement: string
+  reason: string
+  status: RevisionStatus
+}
+
+type Analysis = {
+  summary: string
+  goals: string[]
+  issues: Issue[]
+  revisions: Revision[]
+}
+
+type SelectionSnapshot = {
+  from: number
+  to: number
+  text: string
+}
+
+type HistoryItem = {
+  id: string
+  createdAt: string
+  excerpt: string
+  analysis: Analysis
+}
+
+const storageKeys = {
+  document: 'revision-lens-document',
+  history: 'revision-lens-history',
+  theme: 'revision-lens-theme',
+}
+
+const sampleDocument = `
+<h1>AI 写作工具应该如何真正帮助用户</h1>
+<p>很多 AI 写作产品现在都可以帮助用户更好地完成内容创作，并提升工作效率。但是这些产品经常会直接生成一大段内容，用户很难判断哪些地方是真的有帮助，哪些地方只是看起来更流畅。</p>
+<p>我希望做一个更自然的编辑器体验，让 AI 不只是替用户写东西，而是在合适的时候给出建议。这个产品可以帮助用户管理自己的想法，并让写作过程变得更加高效。</p>
+<p>真正好的 AI Writing 产品应该尊重用户原本的表达，理解用户正在写什么，并在需要的时候提供可以被用户控制的修改。</p>
+`
+
+function getStoredDocument() {
+  return window.localStorage.getItem(storageKeys.document) ?? sampleDocument
+}
+
+function getStoredHistory(): HistoryItem[] {
+  try {
+    return JSON.parse(window.localStorage.getItem(storageKeys.history) ?? '[]')
+  } catch {
+    return []
+  }
+}
+
+function compact(text: string, size = 44) {
+  const clean = text.replace(/\s+/g, ' ').trim()
+  return clean.length > size ? `${clean.slice(0, size)}...` : clean
+}
+
+function normalizeAnalysis(analysis: Analysis): Analysis {
+  return {
+    ...analysis,
+    revisions: analysis.revisions.map((revision, index) => ({
+      ...revision,
+      id: revision.id || `rev_${index + 1}`,
+      status: revision.status ?? 'pending',
+    })),
+  }
+}
+
+async function createMockAnalysis(selectedText: string): Promise<Analysis> {
+  const clean = selectedText.replace(/\s+/g, ' ').trim()
+  const candidates = [
+    {
+      original: '可以帮助用户更好地完成内容创作',
+      replacement: '能帮助用户把零散想法整理成可继续编辑的内容',
+      reason: '把泛泛的“更好地完成”改成更明确的创作动作。',
+      problem: '表达偏泛，缺少真实写作场景。',
+    },
+    {
+      original: '提升工作效率',
+      replacement: '更快把初稿打磨成可发布的内容',
+      reason: '把抽象收益落到“初稿到发布”的具体结果上。',
+      problem: '收益描述模板化，辨识度不够。',
+    },
+    {
+      original: '生成一大段内容',
+      replacement: '一次性抛出整段改写结果',
+      reason: '更贴近 AI 写作工具的真实交互问题。',
+      problem: '原表达准确，但产品语境还可以更具体。',
+    },
+    {
+      original: '给出建议',
+      replacement: '给出可以被逐条接受或忽略的编辑建议',
+      reason: '补充用户控制权，强化产品差异点。',
+      problem: '没有说明建议如何被用户使用。',
+    },
+    {
+      original: '管理自己的想法',
+      replacement: '整理写作过程中的零散判断和表达草稿',
+      reason: '把“想法”拆成更贴近写作工作流的资产。',
+      problem: '概念较大，不够可感知。',
+    },
+    {
+      original: '变得更加高效',
+      replacement: '在不丢失个人语气的前提下更快完成修改',
+      reason: '补充约束条件，避免听起来像普通效率工具。',
+      problem: '表达过于常见，缺少产品态度。',
+    },
+  ]
+
+  const matched = candidates.filter((item) => clean.includes(item.original)).slice(0, 4)
+  const fallbackOriginal = clean.split(/[，。,.]/)[0] || clean.slice(0, 16)
+  const revisions: Revision[] =
+    matched.length > 0
+      ? matched.map((item, index) => ({
+          id: `rev_${Date.now()}_${index}`,
+          original: item.original,
+          replacement: item.replacement,
+          reason: item.reason,
+          status: 'pending',
+        }))
+      : [
+          {
+            id: `rev_${Date.now()}_0`,
+            original: fallbackOriginal,
+            replacement: `${fallbackOriginal}，并补充更具体的使用场景`,
+            reason: '当前表达可以继续保留，但需要增加一点具体性，避免只停留在结论。',
+            status: 'pending',
+          },
+        ]
+
+  const issues = revisions.map((revision, index) => ({
+    text: revision.original,
+    problem: matched[index]?.problem ?? '表达方向清楚，但还缺少可验证的细节。',
+    suggestion: `建议改为“${revision.replacement}”。`,
+  }))
+
+  return new Promise((resolve) => {
+    window.setTimeout(() => {
+      resolve({
+        summary:
+          '这段文字有清晰的产品判断，但部分表达还偏概括。建议保留原本克制的语气，同时把收益、场景和用户控制感说得更具体。',
+        goals: ['保留原文语气', '增强场景感', '让产品差异更清楚'],
+        issues,
+        revisions,
+      })
+    }, 820)
+  })
+}
+
+async function requestAnalysis(selectedText: string, fullContext: string): Promise<Analysis> {
+  try {
+    const response = await fetch('/api/revision/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ selectedText, fullContext }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Analyze failed: ${response.status}`)
+    }
+
+    return normalizeAnalysis(await response.json())
+  } catch {
+    return createMockAnalysis(selectedText)
+  }
+}
+
+function findTextRange(editor: Editor, range: SelectionSnapshot, target: string) {
+  const doc = editor.state.doc
+  const rangeText = doc.textBetween(range.from, range.to, '')
+  const startOffset = rangeText.indexOf(target)
+
+  if (startOffset === -1) {
+    return null
+  }
+
+  const endOffset = startOffset + target.length
+  let textOffset = 0
+  let from = -1
+  let to = -1
+
+  doc.nodesBetween(range.from, range.to, (node, pos) => {
+    if (!node.isText || !node.text) {
+      return
+    }
+
+    const sliceStart = Math.max(0, range.from - pos)
+    const sliceEnd = Math.min(node.text.length, range.to - pos)
+    const slice = node.text.slice(sliceStart, sliceEnd)
+    const segmentStart = textOffset
+    const segmentEnd = textOffset + slice.length
+
+    if (from === -1 && startOffset >= segmentStart && startOffset <= segmentEnd) {
+      from = pos + sliceStart + (startOffset - segmentStart)
+    }
+
+    if (to === -1 && endOffset >= segmentStart && endOffset <= segmentEnd) {
+      to = pos + sliceStart + (endOffset - segmentStart)
+    }
+
+    textOffset = segmentEnd
+  })
+
+  return from > -1 && to > -1 ? { from, to } : null
+}
+
+function DiffView({ original, replacement }: { original: string; replacement: string }) {
+  return (
+    <p className="diff-line">
+      {diffWords(original, replacement).map((part, index) => {
+        if (part.added) {
+          return (
+            <mark className="diff-add" key={index}>
+              {part.value}
+            </mark>
+          )
+        }
+
+        if (part.removed) {
+          return (
+            <mark className="diff-remove" key={index}>
+              {part.value}
+            </mark>
+          )
+        }
+
+        return <span key={index}>{part.value}</span>
+      })}
+    </p>
+  )
+}
+
+function App() {
+  const [analysis, setAnalysis] = useState<Analysis | null>(null)
+  const [selection, setSelection] = useState<SelectionSnapshot | null>(null)
+  const [history, setHistory] = useState<HistoryItem[]>([])
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null)
+  const [darkMode, setDarkMode] = useState(false)
+  const [saveState, setSaveState] = useState('已保存')
+  const [selectedCount, setSelectedCount] = useState(0)
+  const [revisionPanelOpen, setRevisionPanelOpen] = useState(false)
+  const [revisionSelection, setRevisionSelection] = useState<SelectionSnapshot | null>(null)
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const [autoStartVoice, setAutoStartVoice] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const editor = useEditor({
+    extensions: [
+      StarterKit,
+      Placeholder.configure({
+        placeholder: '写一点内容，然后选中一段文字启动 Revision Lens...',
+      }),
+    ],
+    content: typeof window !== 'undefined' ? getStoredDocument() : sampleDocument,
+    editorProps: {
+      attributes: {
+        class: 'editor-prose',
+      },
+    },
+    onSelectionUpdate: ({ editor }) => {
+      const { from, to, empty } = editor.state.selection
+      setSelectedCount(empty ? 0 : editor.state.doc.textBetween(from, to, '').trim().length)
+    },
+    onUpdate: ({ editor }) => {
+      setSaveState('保存中')
+      window.localStorage.setItem(storageKeys.document, editor.getHTML())
+      window.setTimeout(() => setSaveState('已保存'), 280)
+    },
+  })
+
+  useEffect(() => {
+    setHistory(getStoredHistory())
+    setDarkMode(window.localStorage.getItem(storageKeys.theme) === 'dark')
+  }, [])
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', darkMode)
+    window.localStorage.setItem(storageKeys.theme, darkMode ? 'dark' : 'light')
+  }, [darkMode])
+
+  useEffect(() => {
+    if (!exportMenuOpen) return
+    const close = () => setExportMenuOpen(false)
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [exportMenuOpen])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && e.code === 'KeyM') {
+        e.preventDefault()
+        if (!editor) return
+
+        if (revisionPanelOpen) {
+          setAutoStartVoice(true)
+        } else {
+          const { from, to, empty } = editor.state.selection
+          const text = empty ? '' : editor.state.doc.textBetween(from, to, '').trim()
+          if (text) {
+            setRevisionSelection({ from, to, text })
+          } else {
+            setRevisionSelection({ from: 0, to: 0, text: '' })
+          }
+          setRevisionPanelOpen(true)
+          setAutoStartVoice(true)
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [editor, revisionPanelOpen])
+
+  const runAnalysis = async () => {
+    if (!editor) return
+    const { from, to, empty } = editor.state.selection
+    const text = empty ? '' : editor.state.doc.textBetween(from, to, '').trim()
+
+    if (!text) return
+
+    const snapshot = { from, to, text }
+    setSelection(snapshot)
+    setIsAnalyzing(true)
+    setActiveHistoryId(null)
+
+    try {
+      const result = normalizeAnalysis(await requestAnalysis(text, editor.getText()))
+      setAnalysis(result)
+
+      const item: HistoryItem = {
+        id: `hist_${Date.now()}`,
+        createdAt: new Date().toISOString(),
+        excerpt: compact(text),
+        analysis: result,
+      }
+
+      const nextHistory = [item, ...history].slice(0, 12)
+      setHistory(nextHistory)
+      window.localStorage.setItem(storageKeys.history, JSON.stringify(nextHistory))
+    } finally {
+      setIsAnalyzing(false)
+    }
+  }
+
+  const openRevisionPanel = () => {
+    if (!editor) return
+    const { from, to, empty } = editor.state.selection
+    const text = empty ? '' : editor.state.doc.textBetween(from, to, '').trim()
+    if (!text) return
+    setRevisionSelection({ from, to, text })
+    setRevisionPanelOpen(true)
+  }
+
+  const acceptRevisionRewrite = (replacement: string) => {
+    if (!editor || !revisionSelection) return
+    editor.chain().focus().insertContentAt(revisionSelection, replacement).run()
+    setRevisionPanelOpen(false)
+    setAutoStartVoice(false)
+  }
+
+  const updateRevisionStatus = (id: string, status: RevisionStatus) => {
+    setAnalysis((current) => {
+      if (!current) return current
+      return {
+        ...current,
+        revisions: current.revisions.map((revision) =>
+          revision.id === id ? { ...revision, status } : revision,
+        ),
+      }
+    })
+  }
+
+  const acceptRevision = (revision: Revision) => {
+    if (!editor || !selection || revision.status !== 'pending') return
+
+    const textRange = findTextRange(editor, selection, revision.original)
+
+    if (!textRange) {
+      updateRevisionStatus(revision.id, 'ignored')
+      return
+    }
+
+    editor.chain().focus().insertContentAt(textRange, revision.replacement).run()
+    updateRevisionStatus(revision.id, 'accepted')
+  }
+
+  const resetDocument = () => {
+    editor?.commands.setContent(sampleDocument)
+    window.localStorage.setItem(storageKeys.document, sampleDocument)
+    setAnalysis(null)
+    setSelection(null)
+  }
+
+  const clearHistory = () => {
+    setHistory([])
+    setActiveHistoryId(null)
+    window.localStorage.removeItem(storageKeys.history)
+  }
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !editor) return
+    try {
+      const { html } = await importFile(file)
+      editor.commands.setContent(html)
+    } catch (err: any) {
+      alert(err.message)
+    }
+    e.target.value = ''
+  }
+
+  const handleExport = async (format: 'docx' | 'doc' | 'txt' | 'markdown') => {
+    if (!editor) return
+    const html = editor.getHTML()
+    const fileName = `revision-lens-export`
+    setExportMenuOpen(false)
+
+    switch (format) {
+      case 'docx':
+        await exportDocx(html, fileName)
+        break
+      case 'doc':
+        exportDoc(html, fileName)
+        break
+      case 'txt':
+        exportTxt(html, fileName)
+        break
+      case 'markdown':
+        exportMarkdown(html, fileName)
+        break
+    }
+  }
+
+  return (
+    <main className="app-shell">
+      <section className="topbar">
+        <div className="brand">
+          <div className="brand-mark">
+            <Sparkles size={18} />
+          </div>
+          <div>
+            <p>Revision Lens</p>
+            <span>AI writing editor</span>
+          </div>
+        </div>
+
+        <div className="topbar-actions">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".doc,.docx,.txt,.md,.markdown"
+            style={{ display: 'none' }}
+            onChange={handleImport}
+          />
+          <button className="ghost-button" onClick={() => fileInputRef.current?.click()} type="button">
+            <Upload size={15} />
+            导入
+          </button>
+          <div className="export-dropdown-wrap">
+            <button className="ghost-button" onClick={() => setExportMenuOpen(!exportMenuOpen)} type="button">
+              <Download size={15} />
+              导出
+            </button>
+            {exportMenuOpen && (
+              <div className="export-dropdown">
+                <button type="button" onClick={() => handleExport('docx')}>导出为 .docx</button>
+                <button type="button" onClick={() => handleExport('doc')}>导出为 .doc</button>
+                <button type="button" onClick={() => handleExport('txt')}>导出为 .txt</button>
+                <button type="button" onClick={() => handleExport('markdown')}>导出为 .md</button>
+              </div>
+            )}
+          </div>
+          <span className="save-pill">{saveState}</span>
+          <button className="ghost-button" onClick={resetDocument} type="button">
+            <RotateCcw size={15} />
+            示例文本
+          </button>
+          <button
+            aria-label="切换深色模式"
+            className="icon-button"
+            onClick={() => setDarkMode((value) => !value)}
+            type="button"
+          >
+            {darkMode ? <Sun size={17} /> : <Moon size={17} />}
+          </button>
+        </div>
+      </section>
+
+      <section className="workspace">
+        <aside className="history-panel panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Session</p>
+              <h2>诊断历史</h2>
+            </div>
+            {history.length > 0 && (
+              <button className="text-button" onClick={clearHistory} type="button">
+                清空
+              </button>
+            )}
+          </div>
+
+          <div className="history-list">
+            {history.length === 0 ? (
+              <div className="empty-history">
+                <Clock3 size={19} />
+                <p>完成一次诊断后，这里会保存记录。</p>
+              </div>
+            ) : (
+              history.map((item) => (
+                <button
+                  className={`history-item ${activeHistoryId === item.id ? 'active' : ''}`}
+                  key={item.id}
+                  onClick={() => {
+                    setActiveHistoryId(item.id)
+                    setAnalysis(item.analysis)
+                  }}
+                  type="button"
+                >
+                  <span>
+                    {new Date(item.createdAt).toLocaleTimeString('zh-CN', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                  <strong>{item.excerpt}</strong>
+                  <ChevronRight size={15} />
+                </button>
+              ))
+            )}
+          </div>
+        </aside>
+
+        <section className="editor-panel panel">
+          <div className="editor-header">
+            <div>
+              <p className="eyebrow">Document</p>
+              <h1>中文 AI 局部改写编辑器</h1>
+            </div>
+            <div className="editor-stats">
+              <FileText size={15} />
+              <span>Prototype</span>
+            </div>
+          </div>
+
+          <div className="editor-card">
+            {editor && (
+              <BubbleMenu
+                className="bubble-menu"
+                editor={editor}
+                shouldShow={({ state }: { state: Editor['state'] }) => !state.selection.empty}
+              >
+                <button onClick={runAnalysis} type="button">
+                  <Sparkles size={15} />
+                  诊断并改写
+                </button>
+                <button onClick={openRevisionPanel} type="button">
+                  <Wand2 size={15} />
+                  自定义修改
+                </button>
+              </BubbleMenu>
+            )}
+            <EditorContent editor={editor} />
+            <AnimatePresence>
+              {revisionPanelOpen && revisionSelection && (
+                <RevisionPanel
+                  selectedText={revisionSelection.text}
+                  onClose={() => {
+                    setRevisionPanelOpen(false)
+                    setAutoStartVoice(false)
+                  }}
+                  onAccept={acceptRevisionRewrite}
+                  autoStartVoice={autoStartVoice}
+                />
+              )}
+            </AnimatePresence>
+          </div>
+
+          <div className="editor-footer">
+            <span>选中任意一段中文，使用 Revision Lens 查看可解释的修改建议。</span>
+            {selectedCount > 0 && <strong>已选中 {selectedCount} 字</strong>}
+          </div>
+        </section>
+
+        <aside className="lens-panel panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Lens</p>
+              <h2>AI 诊断与改写</h2>
+            </div>
+            <PenLine size={18} />
+          </div>
+
+          {isAnalyzing ? (
+            <div className="loading-state">
+              <Loader2 className="spin" size={24} />
+              <h3>正在阅读你的文本</h3>
+              <p>Revision Lens 会拆解问题、修改意图和可逐条接受的建议。</p>
+            </div>
+          ) : !analysis ? (
+            <div className="empty-lens">
+              <div className="lens-orbit">
+                <Sparkles size={22} />
+              </div>
+              <h3>让 AI 像编辑一样工作</h3>
+              <p>选中一段文字后，AI 会先诊断问题，再给出局部 diff，而不是直接重写整段。</p>
+            </div>
+          ) : (
+            <motion.div
+              animate={{ opacity: 1, y: 0 }}
+              className="analysis-content"
+              initial={{ opacity: 0, y: 8 }}
+              transition={{ duration: 0.22 }}
+            >
+              <section className="summary-card">
+                <span>整体判断</span>
+                <p>{analysis.summary}</p>
+              </section>
+
+              <section className="goals">
+                {analysis.goals.map((goal) => (
+                  <span key={goal}>{goal}</span>
+                ))}
+              </section>
+
+              <section className="issues">
+                <h3>诊断</h3>
+                {analysis.issues.map((issue, index) => (
+                  <article className="issue-item" key={`${issue.text}_${index}`}>
+                    <strong>{issue.text}</strong>
+                    <p>{issue.problem}</p>
+                    <small>{issue.suggestion}</small>
+                  </article>
+                ))}
+              </section>
+
+              <section className="revisions">
+                <h3>可接受的修改</h3>
+                {analysis.revisions.map((revision) => (
+                  <article className={`revision-card ${revision.status}`} key={revision.id}>
+                    <div className="revision-meta">
+                      <span>
+                        {revision.status === 'accepted'
+                          ? '已接受'
+                          : revision.status === 'ignored'
+                            ? '已忽略'
+                            : '建议'}
+                      </span>
+                      <p>{revision.reason}</p>
+                    </div>
+                    <DiffView original={revision.original} replacement={revision.replacement} />
+                    <div className="revision-actions">
+                      <button
+                        disabled={revision.status !== 'pending'}
+                        onClick={() => acceptRevision(revision)}
+                        type="button"
+                      >
+                        <Check size={14} />
+                        接受
+                      </button>
+                      <button
+                        disabled={revision.status !== 'pending'}
+                        onClick={() => updateRevisionStatus(revision.id, 'ignored')}
+                        type="button"
+                      >
+                        <X size={14} />
+                        忽略
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </section>
+            </motion.div>
+          )}
+        </aside>
+      </section>
+    </main>
+  )
+}
+
+export default App

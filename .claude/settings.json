@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -X POST http://localhost:3001/api/revision/analyze -H \"Content-Type: application/json\" -d '{\"selectedText\":\"很多 AI 写作产品现在都可以帮助用户更好地完成内容创作\",\"fullContext\":\"\"}')",
+      "Bash(netstat -ano)",
+      "Bash(taskkill //F //PID 35108)",
+      "Bash(npx tsc *)",
+      "WebSearch"
+    ]
+  }
+}

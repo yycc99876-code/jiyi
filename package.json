@@ -1,0 +1,38 @@
+{
+  "name": "revision-lens",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"npm run dev:api\" \"npm run dev:ui\"",
+    "dev:ui": "vite",
+    "dev:api": "tsx server/api.ts",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@types/diff": "^7.0.2",
+    "@types/node": "^25.7.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "tsx": "^4.21.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.12"
+  },
+  "dependencies": {
+    "@tiptap/extension-placeholder": "^3.23.1",
+    "@tiptap/react": "^3.23.1",
+    "@tiptap/starter-kit": "^3.23.1",
+    "concurrently": "^9.2.1",
+    "diff": "^9.0.0",
+    "docx": "^9.6.1",
+    "dotenv": "^17.4.2",
+    "framer-motion": "^12.38.0",
+    "lucide-react": "^1.14.0",
+    "mammoth": "^1.12.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  }
+}

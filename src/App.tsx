@@ -444,8 +444,6 @@ function App() {
     window.localStorage.setItem(storageKeys.document, '<p></p>')
     setAnalysis(null)
     setSelection(null)
-    setHistory([])
-    window.localStorage.removeItem(storageKeys.history)
   }
 
   const clearHistory = () => {

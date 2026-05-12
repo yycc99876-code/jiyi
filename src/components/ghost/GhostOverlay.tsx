@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Plugin, PluginKey } from 'prosemirror-state'
 import type { Editor } from '@tiptap/react'
 import { Sparkles } from 'lucide-react'
 import { scanParagraph, type GhostSuggestion } from '../../services/ai/ghostScanner'
@@ -13,8 +12,6 @@ interface Props {
   editor: Editor
   containerRef: React.RefObject<HTMLDivElement | null>
 }
-
-const ghostPluginKey = new PluginKey('ghostOverlay')
 
 function getParagraphAtCursor(editor: Editor): HTMLElement | null {
   const { from } = editor.state.selection
@@ -101,11 +98,7 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
     [containerRef],
   )
 
-  // doAccept stored in ref so plugin always calls the latest version
-  const doAcceptRef = useRef<(ghost: GhostWithRect) => void>(() => {})
-  const scanRef = useRef<() => void>(() => {})
-
-  doAcceptRef.current = (ghost: GhostWithRect) => {
+  const doAccept = useCallback((ghost: GhostWithRect) => {
     const ed = editorRef.current
     const { state } = ed
     const doc = state.doc
@@ -122,7 +115,9 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
     setGhosts((prev) => prev.filter((g) => g.id !== ghost.id))
     setActiveIdx(-1)
     setTimeout(() => scanRef.current(), 300)
-  }
+  }, [])
+
+  const scanRef = useRef<() => void>(() => {})
 
   const scanCurrentParagraph = useCallback(async () => {
     const container = containerRef.current
@@ -147,51 +142,52 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
 
   scanRef.current = scanCurrentParagraph
 
-  // ProseMirror plugin — uses refs, never stale
+  // Window-level capture keyboard handler — runs before everything
   useEffect(() => {
-    const plugin = new Plugin({
-      key: ghostPluginKey,
-      props: {
-        handleKeyDown(_view, event) {
-          const g = ghostsRef.current
-          if (g.length === 0) return false
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const g = ghostsRef.current
+      if (g.length === 0) return
 
-          if (event.key === 'Tab') {
-            event.preventDefault()
-            setActiveIdx((i) => {
-              const next = event.shiftKey
-                ? (i <= 0 ? g.length - 1 : i - 1)
-                : (i + 1) % g.length
-              activeIdxRef.current = next
-              return next
-            })
-            return true
-          }
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        e.stopPropagation()
+        e.stopImmediatePropagation()
+        setActiveIdx((i) => {
+          const next = e.shiftKey
+            ? (i <= 0 ? g.length - 1 : i - 1)
+            : (i + 1) % g.length
+          activeIdxRef.current = next
+          return next
+        })
+        // Refocus editor
+        requestAnimationFrame(() => editorRef.current?.commands.focus())
+        return
+      }
 
-          if (event.key === 'Enter') {
-            const idx = activeIdxRef.current
-            if (idx >= 0 && idx < g.length) {
-              event.preventDefault()
-              doAcceptRef.current(g[idx])
-              return true
-            }
-            return false
-          }
+      if (e.key === 'Enter') {
+        const idx = activeIdxRef.current
+        if (idx >= 0 && idx < g.length) {
+          e.preventDefault()
+          e.stopPropagation()
+          e.stopImmediatePropagation()
+          doAccept(g[idx])
+          return
+        }
+      }
 
-          if (event.key === 'Escape') {
-            event.preventDefault()
-            setGhosts([])
-            setActiveIdx(-1)
-            return true
-          }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        e.stopImmediatePropagation()
+        setGhosts([])
+        setActiveIdx(-1)
+        return
+      }
+    }
 
-          return false
-        },
-      },
-    })
-    editor.registerPlugin(plugin)
-    return () => { editor.unregisterPlugin(ghostPluginKey) }
-  }, [editor])
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [doAccept])
 
   useEffect(() => {
     const handler = () => {
@@ -274,15 +270,14 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
           <div
             className="ghost-suggestion-panel"
             style={{ position: 'fixed', top: pRect.bottom + 8, left: pRect.left, zIndex: 999, pointerEvents: 'auto' }}
-            tabIndex={-1}
           >
             {ghosts.map((ghost, i) => (
               <button
                 key={ghost.id}
                 type="button"
-                className={`ghost-suggestion-card ${i === activeIdx ? 'active' : ''} ${ghost.severity}`}
                 tabIndex={-1}
-                onClick={() => doAcceptRef.current(ghost)}
+                className={`ghost-suggestion-card ${i === activeIdx ? 'active' : ''} ${ghost.severity}`}
+                onMouseDown={(e) => { e.preventDefault(); doAccept(ghost) }}
                 onMouseEnter={() => setActiveIdx(i)}
               >
                 <span className="ghost-severity-dot" />

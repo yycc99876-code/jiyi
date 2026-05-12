@@ -100,18 +100,31 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
 
   const doAccept = useCallback((ghost: GhostWithRect) => {
     const ed = editorRef.current
-    const { state } = ed
+    const view = ed.view
+    const { state } = view
     const doc = state.doc
+    const search = ghost.original
+
     let foundFrom = -1
     let foundTo = -1
+
     doc.nodesBetween(0, doc.content.size, (node, pos) => {
-      if (foundFrom !== -1 || !node.isText || !node.text) return false
-      const idx = node.text.indexOf(ghost.original)
-      if (idx !== -1) { foundFrom = pos + idx; foundTo = foundFrom + ghost.original.length }
+      if (foundFrom !== -1) return false
+      if (!node.isText || !node.text) return
+      const idx = node.text.indexOf(search)
+      if (idx !== -1) {
+        foundFrom = pos + idx
+        foundTo = foundFrom + search.length
+      }
       return false
     })
+
     if (foundFrom === -1) return
-    ed.chain().focus().deleteRange({ from: foundFrom, to: foundTo }).insertContentAt(foundFrom, ghost.replacement).run()
+
+    // Use ProseMirror transaction directly — most reliable method
+    const tr = state.tr.insertText(ghost.replacement, foundFrom, foundTo)
+    view.dispatch(tr)
+
     setGhosts((prev) => prev.filter((g) => g.id !== ghost.id))
     setActiveIdx(-1)
     setTimeout(() => scanRef.current(), 300)

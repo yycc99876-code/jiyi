@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Clock3,
   Download,
+  FilePlus,
   FileText,
   Loader2,
   Map,
@@ -438,6 +439,15 @@ function App() {
     setSelection(null)
   }
 
+  const newDocument = () => {
+    editor?.commands.setContent('<p></p>')
+    window.localStorage.setItem(storageKeys.document, '<p></p>')
+    setAnalysis(null)
+    setSelection(null)
+    setHistory([])
+    window.localStorage.removeItem(storageKeys.history)
+  }
+
   const clearHistory = () => {
     setHistory([])
     setActiveHistoryId(null)
@@ -520,6 +530,10 @@ function App() {
             style={{ display: 'none' }}
             onChange={handleImport}
           />
+          <button className="ghost-button" onClick={newDocument} type="button">
+            <FilePlus size={15} />
+            新建
+          </button>
           <button className="ghost-button" onClick={() => fileInputRef.current?.click()} type="button">
             <Upload size={15} />
             导入

@@ -92,6 +92,11 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
   const cacheRef = useRef<Map<string, GhostSuggestion[]>>(new Map())
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
   const scanIdRef = useRef(0)
+  const ghostsRef = useRef<GhostWithRect[]>([])
+  const activeIdxRef = useRef(-1)
+
+  useEffect(() => { ghostsRef.current = ghosts }, [ghosts])
+  useEffect(() => { activeIdxRef.current = activeIdx }, [activeIdx])
 
   const recalcRects = useCallback(
     (suggestions: GhostSuggestion[], paragraph: HTMLElement) => {
@@ -187,34 +192,9 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
     }
   }, [editor, containerRef, ghosts.length, recalcRects])
 
+  // Keyboard: use window-level capture to intercept before editor
   useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-
-    const handleKey = (e: KeyboardEvent) => {
-      if (ghosts.length === 0) return
-
-      if (e.key === 'Tab' && !e.shiftKey) {
-        e.preventDefault()
-        setActiveIdx((i) => (i + 1) % ghosts.length)
-      } else if (e.key === 'Tab' && e.shiftKey) {
-        e.preventDefault()
-        setActiveIdx((i) => (i <= 0 ? ghosts.length - 1 : i - 1))
-      } else if (e.key === 'Enter' && activeIdx >= 0 && activeIdx < ghosts.length) {
-        e.preventDefault()
-        acceptGhost(ghosts[activeIdx])
-      } else if (e.key === 'Escape') {
-        e.preventDefault()
-        setActiveIdx(-1)
-      }
-    }
-
-    el.addEventListener('keydown', handleKey)
-    return () => el.removeEventListener('keydown', handleKey)
-  }, [containerRef, ghosts, activeIdx])
-
-  const acceptGhost = useCallback(
-    (ghost: GhostWithRect) => {
+    const acceptGhost = (ghost: GhostWithRect) => {
       const { state } = editor
       const doc = state.doc
       const search = ghost.original
@@ -237,11 +217,45 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
 
       setGhosts((prev) => prev.filter((g) => g.id !== ghost.id))
       setActiveIdx(-1)
-
       setTimeout(scanCurrentParagraph, 300)
-    },
-    [editor, scanCurrentParagraph],
-  )
+    }
+
+    const handleKey = (e: KeyboardEvent) => {
+      const currentGhosts = ghostsRef.current
+      if (currentGhosts.length === 0) return
+
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        e.stopPropagation()
+        setActiveIdx((i) => {
+          const next = e.shiftKey
+            ? (i <= 0 ? currentGhosts.length - 1 : i - 1)
+            : (i + 1) % currentGhosts.length
+          activeIdxRef.current = next
+          return next
+        })
+        return
+      }
+
+      if (e.key === 'Enter' && activeIdxRef.current >= 0 && activeIdxRef.current < currentGhosts.length) {
+        e.preventDefault()
+        e.stopPropagation()
+        acceptGhost(currentGhosts[activeIdxRef.current])
+        return
+      }
+
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        setGhosts([])
+        setActiveIdx(-1)
+        return
+      }
+    }
+
+    window.addEventListener('keydown', handleKey, true)
+    return () => window.removeEventListener('keydown', handleKey, true)
+  }, [editor, scanCurrentParagraph])
 
   if (ghosts.length === 0 && !loading) return null
 
@@ -263,7 +277,6 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
             alignItems: 'flex-end',
           }}
         >
-          {/* Highlight underline on original text */}
           <div
             style={{
               position: 'absolute',
@@ -276,7 +289,6 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
               opacity: 0.7,
             }}
           />
-          {/* Replacement text above original */}
           <div
             style={{
               position: 'absolute',
@@ -307,25 +319,55 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
         </div>
       )}
 
-      {/* Suggestion panel below current paragraph */}
+      {/* Suggestion panel - fixed to viewport, always visible */}
       {ghosts.length > 0 && (() => {
         const paragraph = getParagraphAtCursor(editor)
         const container = containerRef.current
         if (!paragraph || !container) return null
 
         const pRect = paragraph.getBoundingClientRect()
-        const cRect = container.getBoundingClientRect()
-        const top = pRect.bottom - cRect.top + container.scrollTop + 8
-        const left = pRect.left - cRect.left
+        const panelTop = pRect.bottom + 8
+        const panelLeft = pRect.left
 
         return (
-          <div className="ghost-suggestion-panel" style={{ top, left, pointerEvents: 'auto' }}>
+          <div
+            className="ghost-suggestion-panel"
+            style={{
+              position: 'fixed',
+              top: panelTop,
+              left: panelLeft,
+              zIndex: 999,
+              pointerEvents: 'auto',
+            }}
+          >
             {ghosts.map((ghost, i) => (
               <button
                 key={ghost.id}
                 type="button"
                 className={`ghost-suggestion-card ${i === activeIdx ? 'active' : ''} ${ghost.severity}`}
-                onClick={() => acceptGhost(ghost)}
+                onClick={() => {
+                  // inline accept
+                  const { state } = editor
+                  const doc = state.doc
+                  let foundFrom = -1
+                  let foundTo = -1
+                  doc.nodesBetween(0, doc.content.size, (node, pos) => {
+                    if (foundFrom !== -1 || !node.isText || !node.text) return false
+                    const idx = node.text.indexOf(ghost.original)
+                    if (idx !== -1) {
+                      foundFrom = pos + idx
+                      foundTo = foundFrom + ghost.original.length
+                    }
+                    return false
+                  })
+                  if (foundFrom !== -1) {
+                    editor.chain().focus().deleteRange({ from: foundFrom, to: foundTo }).insertContentAt(foundFrom, ghost.replacement).run()
+                  }
+                  setGhosts((prev) => prev.filter((g) => g.id !== ghost.id))
+                  setActiveIdx(-1)
+                  setTimeout(scanCurrentParagraph, 300)
+                }}
+                onMouseEnter={() => setActiveIdx(i)}
               >
                 <span className="ghost-severity-dot" />
                 <span className="ghost-suggestion-text">{ghost.replacement}</span>

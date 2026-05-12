@@ -1102,30 +1102,40 @@ button {
 }
 
 .ghost-suggestion-panel {
-  position: absolute;
-  z-index: 15;
-  min-width: 260px;
-  max-width: 380px;
-  padding: 6px;
+  min-width: 280px;
+  max-width: 420px;
+  padding: 8px;
   border: 1px solid var(--line-strong);
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--surface-strong);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-  backdrop-filter: blur(16px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(20px);
+  animation: ghost-panel-in 0.18s ease-out;
+}
+
+@keyframes ghost-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 :root.dark .ghost-suggestion-panel {
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
 .ghost-suggestion-card {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 8px;
   background: transparent;
   color: var(--text);
   text-align: left;
@@ -1133,14 +1143,15 @@ button {
   transition: all 0.12s;
 }
 
-.ghost-suggestion-card:hover,
-.ghost-suggestion-card.active {
+.ghost-suggestion-card:hover {
   border-color: var(--line);
-  background: rgba(185, 129, 36, 0.08);
+  background: rgba(185, 129, 36, 0.06);
 }
 
 .ghost-suggestion-card.active {
   border-color: var(--accent);
+  background: rgba(185, 129, 36, 0.1);
+  box-shadow: 0 0 0 1px rgba(185, 129, 36, 0.15);
 }
 
 .ghost-severity-dot {
@@ -1180,11 +1191,13 @@ button {
 }
 
 .ghost-hint {
-  padding: 4px 10px 2px;
+  padding: 6px 12px 4px;
   font-size: 10px;
   color: var(--muted);
-  opacity: 0.7;
+  opacity: 0.6;
   text-align: center;
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
 }
 
 /* ─── Intent Panel ─── */

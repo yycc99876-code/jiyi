@@ -58,7 +58,7 @@ export default async function handler(req: any, res: any) {
   }
 
   const ext = mimeType.includes('webm') ? 'webm' : mimeType.includes('mp4') ? 'mp4' : 'wav'
-  const fileBlob = new Blob([audioBuffer], { type: mimeType })
+  const fileBlob = new Blob([new Uint8Array(audioBuffer)], { type: mimeType })
   const form = new FormData()
   form.append('file', fileBlob, `audio.${ext}`)
   form.append('model', 'paraformer-v2')

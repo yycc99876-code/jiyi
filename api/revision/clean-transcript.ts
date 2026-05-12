@@ -1,12 +1,3 @@
-function parseJson(text: string) {
-  const cleaned = text
-    .trim()
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/i, '')
-    .replace(/\s*```$/i, '')
-  return JSON.parse(cleaned)
-}
-
 function cleanRewrittenText(raw: unknown, original: string) {
   let text =
     typeof raw === 'string'

@@ -1082,6 +1082,39 @@ button {
   color: var(--text);
 }
 
+/* ─── Ghost Tab Empty ─── */
+
+.ghost-tab-empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  flex: 1;
+  padding: 32px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.ghost-tab-empty p {
+  max-width: 240px;
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.ghost-tab-hint {
+  display: flex;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.ghost-tab-hint span {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 /* ─── Ghost Overlay ─── */
 
 .ghost-loading-hint {

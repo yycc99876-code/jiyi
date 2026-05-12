@@ -12,6 +12,7 @@ import {
   Download,
   FileText,
   Loader2,
+  Map,
   Moon,
   PenLine,
   RotateCcw,
@@ -287,7 +288,7 @@ function App() {
   const [revisionSelection, setRevisionSelection] = useState<SelectionSnapshot | null>(null)
   const [exportMenuOpen, setExportMenuOpen] = useState(false)
   const [autoStartVoice, setAutoStartVoice] = useState(false)
-  const [rightTab, setRightTab] = useState<'ghost' | 'lens'>('ghost')
+  const [rightTab, setRightTab] = useState<'ghost' | 'intent' | 'lens'>('ghost')
   const editorCardRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -662,6 +663,14 @@ function App() {
                 幽灵文字
               </button>
               <button
+                className={`panel-tab ${rightTab === 'intent' ? 'active' : ''}`}
+                onClick={() => setRightTab('intent')}
+                type="button"
+              >
+                <Map size={14} />
+                意图空间
+              </button>
+              <button
                 className={`panel-tab ${rightTab === 'lens' ? 'active' : ''}`}
                 onClick={() => setRightTab('lens')}
                 type="button"
@@ -673,6 +682,16 @@ function App() {
           </div>
 
           {rightTab === 'ghost' ? (
+            <div className="ghost-tab-empty">
+              <Sparkles size={18} />
+              <p>在编辑器中输入文字，AI 会自动扫描并显示幽灵文字建议。</p>
+              <div className="ghost-tab-hint">
+                <span>Tab 切换建议</span>
+                <span>Enter 接受</span>
+                <span>Esc 关闭</span>
+              </div>
+            </div>
+          ) : rightTab === 'intent' ? (
             <IntentPanel fullText={editor?.getText() ?? ''} onNodeClick={handleIntentNodeClick} />
           ) : isAnalyzing ? (
             <div className="loading-state">

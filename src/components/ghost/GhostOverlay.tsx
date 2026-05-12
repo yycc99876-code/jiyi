@@ -119,7 +119,11 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
       return false
     })
 
-    if (foundFrom === -1) return
+    if (foundFrom === -1) {
+      console.log('[Ghost] Text not found in doc:', search)
+      return
+    }
+    console.log('[Ghost] Replacing at', foundFrom, '-', foundTo, ':', search, '→', ghost.replacement)
 
     // Use ProseMirror transaction directly — most reliable method
     const tr = state.tr.insertText(ghost.replacement, foundFrom, foundTo)
@@ -179,10 +183,12 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
 
       if (e.key === 'Enter') {
         const idx = activeIdxRef.current
+        console.log('[Ghost] Enter pressed, activeIdx:', idx, 'ghosts:', g.length)
         if (idx >= 0 && idx < g.length) {
           e.preventDefault()
           e.stopPropagation()
           e.stopImmediatePropagation()
+          console.log('[Ghost] Accepting:', g[idx].original, '→', g[idx].replacement)
           doAccept(g[idx])
           return
         }

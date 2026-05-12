@@ -21,8 +21,10 @@ import {
   Wand2,
   X,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import RevisionPanel from './components/revision/RevisionPanel'
+import GhostOverlay from './components/ghost/GhostOverlay'
+import IntentPanel from './components/intent/IntentPanel'
 import {
   importFile,
   exportTxt,
@@ -285,6 +287,8 @@ function App() {
   const [revisionSelection, setRevisionSelection] = useState<SelectionSnapshot | null>(null)
   const [exportMenuOpen, setExportMenuOpen] = useState(false)
   const [autoStartVoice, setAutoStartVoice] = useState(false)
+  const [rightTab, setRightTab] = useState<'ghost' | 'lens'>('ghost')
+  const editorCardRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const editor = useEditor({
@@ -451,6 +455,27 @@ function App() {
     e.target.value = ''
   }
 
+  const handleIntentNodeClick = useCallback(
+    (paragraph: string) => {
+      if (!editor) return
+      const doc = editor.state.doc
+      let found = -1
+      doc.nodesBetween(0, doc.content.size, (node, pos) => {
+        if (found !== -1 || !node.isText || !node.text) return false
+        if (node.text.includes(paragraph.slice(0, 20))) {
+          found = pos
+        }
+        return false
+      })
+      if (found !== -1) {
+        editor.commands.focus(found)
+        const editorEl = editor.view.dom
+        editorEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    },
+    [editor],
+  )
+
   const handleExport = async (format: 'docx' | 'doc' | 'txt' | 'markdown') => {
     if (!editor) return
     const html = editor.getHTML()
@@ -585,7 +610,7 @@ function App() {
             </div>
           </div>
 
-          <div className="editor-card">
+          <div className="editor-card" ref={editorCardRef}>
             {editor && (
               <BubbleMenu
                 className="bubble-menu"
@@ -616,6 +641,7 @@ function App() {
                 />
               )}
             </AnimatePresence>
+            {editor && <GhostOverlay editor={editor} containerRef={editorCardRef} />}
           </div>
 
           <div className="editor-footer">
@@ -626,14 +652,29 @@ function App() {
 
         <aside className="lens-panel panel">
           <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Lens</p>
-              <h2>AI 诊断与改写</h2>
+            <div className="panel-tabs">
+              <button
+                className={`panel-tab ${rightTab === 'ghost' ? 'active' : ''}`}
+                onClick={() => setRightTab('ghost')}
+                type="button"
+              >
+                <Sparkles size={14} />
+                幽灵文字
+              </button>
+              <button
+                className={`panel-tab ${rightTab === 'lens' ? 'active' : ''}`}
+                onClick={() => setRightTab('lens')}
+                type="button"
+              >
+                <PenLine size={14} />
+                诊断
+              </button>
             </div>
-            <PenLine size={18} />
           </div>
 
-          {isAnalyzing ? (
+          {rightTab === 'ghost' ? (
+            <IntentPanel fullText={editor?.getText() ?? ''} onNodeClick={handleIntentNodeClick} />
+          ) : isAnalyzing ? (
             <div className="loading-state">
               <Loader2 className="spin" size={24} />
               <h3>正在阅读你的文本</h3>

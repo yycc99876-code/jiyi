@@ -4,6 +4,8 @@ import http from 'node:http'
 const PORT = 3001
 const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY
 const DASHSCOPE_MODEL = process.env.DASHSCOPE_MODEL || 'qwen3.6-plus'
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY
+const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat'
 
 const analyzeSchemaHint = `{
   "summary": "整体判断",
@@ -155,6 +157,31 @@ async function callDashScope(messages: { role: string; content: string }[], json
   const content = data?.choices?.[0]?.message?.content
   if (!content) throw new Error('Empty model response')
   return json ? parseJson(content) : content
+}
+
+async function callDeepSeek(messages: { role: string; content: string }[], temperature = 0.3) {
+  const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: DEEPSEEK_MODEL,
+      temperature,
+      response_format: { type: 'json_object' },
+      messages,
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`DeepSeek error ${response.status}: ${await response.text()}`)
+  }
+
+  const data = await response.json()
+  const content = data?.choices?.[0]?.message?.content
+  if (!content) throw new Error('Empty model response')
+  return parseJson(content)
 }
 
 async function handleAnalyze(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -346,6 +373,85 @@ async function handleTranscribe(req: http.IncomingMessage, res: http.ServerRespo
   json(res, 200, { text })
 }
 
+async function handleGhostScan(req: http.IncomingMessage, res: http.ServerResponse) {
+  const body = JSON.parse(await readBody(req))
+  const { paragraphText, fullContext } = body
+
+  if (!paragraphText || typeof paragraphText !== 'string') {
+    return json(res, 400, { error: 'paragraphText is required' })
+  }
+
+  if (!DEEPSEEK_API_KEY) {
+    return json(res, 500, { error: 'DEEPSEEK_API_KEY is not configured' })
+  }
+
+  let result
+  try {
+    result = await callDeepSeek([
+      {
+        role: 'system',
+        content:
+          '你是中文写作编辑。分析用户给定的段落，找出可以改进的地方。对每个改进点，给出原文片段和建议替换文本。保留用户原本语气，不要过度润色。每条 original 必须能在 paragraphText 中完整找到。severity: minor=措辞微调, moderate=表达改进, major=逻辑/结构问题。只返回严格 JSON。',
+      },
+      {
+        role: 'user',
+        content: `paragraphText:\n${paragraphText}\n\nfullContext（仅供参考，不要修改）:\n${fullContext || '无'}\n\n返回格式：{"suggestions":[{"original":"原文片段","replacement":"建议替换","reason":"原因","severity":"minor/moderate/major"}]}`,
+      },
+    ])
+  } catch {
+    return json(res, 200, { suggestions: [] })
+  }
+
+  const suggestions = Array.isArray(result?.suggestions)
+    ? result.suggestions.filter(
+        (s: any) =>
+          s.original &&
+          s.replacement &&
+          typeof s.original === 'string' &&
+          typeof s.replacement === 'string' &&
+          paragraphText.includes(s.original),
+      )
+    : []
+
+  json(res, 200, { suggestions })
+}
+
+async function handleIntentMap(req: http.IncomingMessage, res: http.ServerResponse) {
+  const body = JSON.parse(await readBody(req))
+  const { fullText } = body
+
+  if (!fullText || typeof fullText !== 'string') {
+    return json(res, 400, { error: 'fullText is required' })
+  }
+
+  if (!DEEPSEEK_API_KEY) {
+    return json(res, 500, { error: 'DEEPSEEK_API_KEY is not configured' })
+  }
+
+  let result
+  try {
+    result = await callDeepSeek([
+      {
+        role: 'system',
+        content:
+          '你是一个文章结构分析专家。分析用户的文章，提取核心论点和它们之间的逻辑关系。每个论点关联到文章中的一个段落片段。只返回严格 JSON。',
+      },
+      {
+        role: 'user',
+        content: `文章全文：\n${fullText}\n\n返回格式：{"nodes":[{"id":"n1","label":"论点摘要","paragraph":"对应的段落片段","strength":"strong/medium/weak"}],"edges":[{"from":"n1","to":"n2","relation":"supports/contradicts/extends/weakens"}],"summary":"文章整体结构判断"}`,
+      },
+    ])
+  } catch {
+    return json(res, 200, { nodes: [], edges: [], summary: '' })
+  }
+
+  json(res, 200, {
+    nodes: Array.isArray(result?.nodes) ? result.nodes : [],
+    edges: Array.isArray(result?.edges) ? result.edges : [],
+    summary: typeof result?.summary === 'string' ? result.summary : '',
+  })
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
@@ -374,6 +480,10 @@ const server = http.createServer(async (req, res) => {
       await handleCleanTranscript(req, res)
     } else if (req.url === '/api/revision/transcribe') {
       await handleTranscribe(req, res)
+    } else if (req.url === '/api/revision/ghost-scan') {
+      await handleGhostScan(req, res)
+    } else if (req.url === '/api/revision/intent-map') {
+      await handleIntentMap(req, res)
     } else {
       json(res, 404, { error: 'Not found' })
     }
@@ -384,6 +494,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`[API] DashScope proxy running on http://localhost:${PORT}`)
-  console.log(`[API] Model: ${DASHSCOPE_MODEL}`)
-  console.log(`[API] Key: ${DASHSCOPE_API_KEY ? 'configured' : 'MISSING'}`)
+  console.log(`[API] DashScope Model: ${DASHSCOPE_MODEL} | Key: ${DASHSCOPE_API_KEY ? 'ok' : 'MISSING'}`)
+  console.log(`[API] DeepSeek Model: ${DEEPSEEK_MODEL} | Key: ${DEEPSEEK_API_KEY ? 'ok' : 'MISSING'}`)
 })

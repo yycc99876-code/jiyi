@@ -78,6 +78,8 @@ const emptyGhostConsole: GhostConsoleState = {
   loading: false,
   acceptCurrent: () => {},
   acceptSuggestion: () => {},
+  ignoreCurrent: () => {},
+  ignoreSuggestion: () => {},
   clearSuggestions: () => {},
   setActiveIndex: () => {},
 }
@@ -745,10 +747,18 @@ function App() {
                   </button>
                   <button
                     className="ghost-console-secondary"
-                    onClick={() => ghostConsole.clearSuggestions()}
+                    disabled={!activeGhost}
+                    onClick={() => ghostConsole.ignoreCurrent()}
                     type="button"
                   >
                     <X size={14} />
+                    忽略当前
+                  </button>
+                  <button
+                    className="ghost-console-secondary"
+                    onClick={() => ghostConsole.clearSuggestions()}
+                    type="button"
+                  >
                     清空建议
                   </button>
                 </div>

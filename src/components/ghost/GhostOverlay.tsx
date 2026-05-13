@@ -6,10 +6,12 @@ import { scanParagraph, type GhostSuggestion } from '../../services/ai/ghostScan
 interface GhostWithRect extends GhostSuggestion {
   rect: { top: number; left: number; width: number; height: number }
   id: string
+  paragraphText: string
 }
 
 export interface GhostUiSuggestion extends GhostSuggestion {
   id: string
+  paragraphText: string
 }
 
 export interface GhostConsoleState {
@@ -18,6 +20,8 @@ export interface GhostConsoleState {
   loading: boolean
   acceptCurrent: () => void
   acceptSuggestion: (id: string) => void
+  ignoreCurrent: () => void
+  ignoreSuggestion: (id: string) => void
   clearSuggestions: () => void
   setActiveIndex: (index: number) => void
 }
@@ -90,6 +94,7 @@ export default function GhostOverlay({ editor, containerRef, onStateChange }: Pr
   const [activeIdx, setActiveIdx] = useState(-1)
   const [loading, setLoading] = useState(false)
   const cacheRef = useRef<Map<string, GhostSuggestion[]>>(new Map())
+  const ignoredKeySetRef = useRef<Set<string>>(new Set())
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
   const scanIdRef = useRef(0)
 
@@ -101,16 +106,46 @@ export default function GhostOverlay({ editor, containerRef, onStateChange }: Pr
   useEffect(() => { activeIdxRef.current = activeIdx }, [activeIdx])
   useEffect(() => { editorRef.current = editor }, [editor])
 
+  const filterSuggestions = useCallback(
+    (raw: GhostSuggestion[], paragraphText: string): GhostSuggestion[] => {
+      const seen = new Set<string>()
+      const result: GhostSuggestion[] = []
+      for (const s of raw) {
+        const orig = (s.original ?? '').trim()
+        const repl = (s.replacement ?? '').trim()
+        const reason = (s.reason ?? '').trim()
+        const severity: GhostSuggestion['severity'] =
+          s.severity === 'minor' || s.severity === 'moderate' || s.severity === 'major'
+            ? s.severity
+            : 'minor'
+        if (!orig || !repl) continue
+        if (orig === repl) continue
+        if (!paragraphText.includes(orig)) continue
+        if (orig.length > 4 && repl.length > orig.length * 2) continue
+        const key = `${orig}__${repl}`
+        if (ignoredKeySetRef.current.has(key)) continue
+        if (seen.has(key)) continue
+        seen.add(key)
+        result.push({ original: orig, replacement: repl, reason, severity })
+        if (result.length >= 3) break
+      }
+      return result
+    },
+    [],
+  )
+
   const recalcRects = useCallback(
     (suggestions: GhostSuggestion[], paragraph: HTMLElement) => {
       const container = containerRef.current
       if (!container) return []
-      return suggestions.flatMap((s) => {
+      const paraText = extractParagraphText(paragraph)
+      const filtered = filterSuggestions(suggestions, paraText)
+      return filtered.flatMap((s) => {
         const rect = findGhostRects(paragraph, s.original, container)
-        return rect ? [{ ...s, rect, id: `${s.original}__${s.replacement}` }] : []
+        return rect ? [{ ...s, rect, id: `${s.original}__${s.replacement}`, paragraphText: paraText }] : []
       })
     },
-    [containerRef],
+    [containerRef, filterSuggestions],
   )
 
   const doAccept = useCallback((ghost: GhostWithRect) => {
@@ -120,10 +155,31 @@ export default function GhostOverlay({ editor, containerRef, onStateChange }: Pr
     const doc = state.doc
     const search = ghost.original
 
+    // Find the paragraph that produced this suggestion by matching paragraphText
+    let paraFrom = -1
+    let paraTo = -1
+    doc.nodesBetween(0, doc.content.size, (node, pos) => {
+      if (paraFrom !== -1) return false
+      if (node.isBlock && node.textContent === ghost.paragraphText) {
+        paraFrom = pos
+        paraTo = pos + node.nodeSize
+        return false
+      }
+      return false
+    })
+
+    if (paraFrom === -1) {
+      // Paragraph text has changed (user edited) — drop this stale suggestion
+      setGhosts((prev) => prev.filter((g) => g.id !== ghost.id))
+      setActiveIdx(-1)
+      return
+    }
+
+    // Search only within that paragraph for the original text
     let foundFrom = -1
     let foundTo = -1
 
-    doc.nodesBetween(0, doc.content.size, (node, pos) => {
+    doc.nodesBetween(paraFrom, paraTo, (node, pos) => {
       if (foundFrom !== -1) return false
       if (!node.isText || !node.text) return
       const idx = node.text.indexOf(search)
@@ -135,9 +191,12 @@ export default function GhostOverlay({ editor, containerRef, onStateChange }: Pr
     })
 
     if (foundFrom === -1) {
-      console.log('[Ghost] Text not found in doc:', search)
+      // Original text no longer exists in the paragraph — drop the stale suggestion
+      setGhosts((prev) => prev.filter((g) => g.id !== ghost.id))
+      setActiveIdx(-1)
       return
     }
+
     const tr = state.tr.insertText(ghost.replacement, foundFrom, foundTo)
     view.dispatch(tr)
 
@@ -161,6 +220,26 @@ export default function GhostOverlay({ editor, containerRef, onStateChange }: Pr
     setGhosts([])
     setActiveIdx(-1)
   }, [])
+
+  const ignoreSuggestion = useCallback((id: string) => {
+    const ghost = ghostsRef.current.find((g) => g.id === id)
+    if (ghost) {
+      ignoredKeySetRef.current.add(`${ghost.original}__${ghost.replacement}`)
+    }
+    setGhosts((prev) => {
+      const next = prev.filter((g) => g.id !== id)
+      setActiveIdx((i) => (i >= next.length ? Math.max(next.length - 1, -1) : i))
+      return next
+    })
+  }, [])
+
+  const ignoreCurrent = useCallback(() => {
+    const g = ghostsRef.current
+    const idx = activeIdxRef.current >= 0 ? activeIdxRef.current : 0
+    if (idx >= 0 && idx < g.length) {
+      ignoreSuggestion(g[idx].id)
+    }
+  }, [ignoreSuggestion])
 
   const setActiveIndex = useCallback((index: number) => {
     const max = ghostsRef.current.length - 1
@@ -195,15 +274,17 @@ export default function GhostOverlay({ editor, containerRef, onStateChange }: Pr
   useEffect(() => {
     if (!onStateChange) return
     onStateChange({
-      suggestions: ghosts.map(({ id, original, replacement, reason, severity }) => ({ id, original, replacement, reason, severity })),
+      suggestions: ghosts.map(({ id, original, replacement, reason, severity, paragraphText }) => ({ id, original, replacement, reason, severity, paragraphText })),
       activeIndex: activeIdx,
       loading,
       acceptCurrent,
       acceptSuggestion,
+      ignoreCurrent,
+      ignoreSuggestion,
       clearSuggestions,
       setActiveIndex,
     })
-  }, [ghosts, activeIdx, loading, onStateChange, acceptCurrent, acceptSuggestion, clearSuggestions, setActiveIndex])
+  }, [ghosts, activeIdx, loading, onStateChange, acceptCurrent, acceptSuggestion, ignoreCurrent, ignoreSuggestion, clearSuggestions, setActiveIndex])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -227,7 +308,7 @@ export default function GhostOverlay({ editor, containerRef, onStateChange }: Pr
       }
 
       if (e.key === 'Enter') {
-        const idx = activeIdxRef.current
+        const idx = activeIdxRef.current >= 0 ? activeIdxRef.current : 0
         if (idx >= 0 && idx < g.length) {
           e.preventDefault()
           e.stopPropagation()
@@ -313,48 +394,6 @@ export default function GhostOverlay({ editor, containerRef, onStateChange }: Pr
         </div>
       )}
 
-      {ghosts.length > 0 && (() => {
-        const paragraph = getParagraphAtCursor(editor)
-        const container = containerRef.current
-        if (!paragraph || !container) return null
-        const pRect = paragraph.getBoundingClientRect()
-        const panelWidth = Math.min(460, window.innerWidth - 32)
-        const left = Math.min(Math.max(pRect.left, 16), Math.max(16, window.innerWidth - panelWidth - 16))
-        const preferredTop = pRect.bottom + 10
-        const top = Math.min(Math.max(preferredTop, 16), Math.max(16, window.innerHeight - 260))
-
-        return (
-          <div
-            className="ghost-suggestion-panel"
-            style={{ top, left, width: panelWidth }}
-          >
-            {ghosts.map((ghost, i) => (
-              <button
-                key={ghost.id}
-                type="button"
-                tabIndex={-1}
-                className={`ghost-suggestion-card ${i === activeIdx ? 'active' : ''} ${ghost.severity}`}
-                onMouseDown={(e) => { e.preventDefault(); doAccept(ghost) }}
-                onMouseEnter={() => setActiveIdx(i)}
-              >
-                <span className="ghost-severity-dot" />
-                <span className="ghost-suggestion-body">
-                  <span className="ghost-suggestion-row">
-                    <span className="ghost-suggestion-label">原文</span>
-                    <span className="ghost-suggestion-original">{ghost.original}</span>
-                  </span>
-                  <span className="ghost-suggestion-row">
-                    <span className="ghost-suggestion-label">建议</span>
-                    <span className="ghost-suggestion-text">{ghost.replacement}</span>
-                  </span>
-                  <span className="ghost-suggestion-reason">{ghost.reason}</span>
-                </span>
-              </button>
-            ))}
-            <div className="ghost-hint">Tab 切换 · Enter 接受 · Esc 关闭</div>
-          </div>
-        )
-      })()}
     </>
   )
 }

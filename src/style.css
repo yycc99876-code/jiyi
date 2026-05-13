@@ -1159,7 +1159,7 @@ button {
 
 .ghost-console-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 8px;
 }
 
@@ -1394,140 +1394,6 @@ button {
   font-weight: 600;
 }
 
-.ghost-suggestion-panel {
-  position: fixed;
-  max-width: calc(100vw - 32px);
-  max-height: min(430px, calc(100vh - 32px));
-  overflow: auto;
-  padding: 8px;
-  border: 1px solid var(--line-strong);
-  border-radius: 10px;
-  background: var(--surface-strong);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(255, 255, 255, 0.04);
-  backdrop-filter: blur(20px);
-  animation: ghost-panel-in 0.18s ease-out;
-  z-index: 999;
-  pointer-events: auto;
-}
-
-@keyframes ghost-panel-in {
-  from {
-    opacity: 0;
-    transform: translateY(-6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-:root.dark .ghost-suggestion-panel {
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.06);
-}
-
-.ghost-suggestion-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  width: 100%;
-  padding: 11px 12px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-  transition: all 0.12s;
-}
-
-.ghost-suggestion-card:hover {
-  border-color: var(--line);
-  background: rgba(185, 129, 36, 0.06);
-}
-
-.ghost-suggestion-card.active {
-  border-color: var(--accent);
-  background: rgba(185, 129, 36, 0.1);
-  box-shadow: 0 0 0 1px rgba(185, 129, 36, 0.15);
-}
-
-.ghost-severity-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  margin-top: 8px;
-  flex-shrink: 0;
-  background: var(--muted);
-}
-
-.ghost-suggestion-card.minor .ghost-severity-dot {
-  background: var(--green);
-}
-
-.ghost-suggestion-card.moderate .ghost-severity-dot {
-  background: var(--accent);
-}
-
-.ghost-suggestion-card.major .ghost-severity-dot {
-  background: var(--red);
-}
-
-.ghost-suggestion-body {
-  display: grid;
-  gap: 5px;
-  min-width: 0;
-  flex: 1;
-}
-
-.ghost-suggestion-row {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 8px;
-  align-items: baseline;
-}
-
-.ghost-suggestion-label {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.ghost-suggestion-original {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.55;
-  text-decoration: line-through;
-  text-decoration-thickness: 1px;
-  text-decoration-color: color-mix(in srgb, var(--muted) 55%, transparent);
-  overflow-wrap: anywhere;
-}
-
-.ghost-suggestion-text {
-  font-size: 13px;
-  font-weight: 560;
-  line-height: 1.55;
-  color: var(--text);
-  overflow-wrap: anywhere;
-}
-
-.ghost-suggestion-reason {
-  display: block;
-  font-size: 11px;
-  color: var(--muted);
-  line-height: 1.55;
-  padding-left: 42px;
-  overflow-wrap: anywhere;
-}
-
-.ghost-hint {
-  padding: 6px 12px 4px;
-  font-size: 10px;
-  color: var(--muted);
-  opacity: 0.6;
-  text-align: center;
-  border-top: 1px solid var(--line);
-  margin-top: 4px;
-}
 
 /* ─── Intent Panel ─── */
 

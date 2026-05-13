@@ -47,11 +47,11 @@ export default async function handler(req: any, res: any) {
           {
             role: 'system',
             content:
-              '你是中文写作编辑。分析用户给定的段落，找出可以改进的地方。对每个改进点，给出原文片段和建议替换文本。保留用户原本语气，不要过度润色。每条 original 必须能在 paragraphText 中完整找到。severity: minor=措辞微调, moderate=表达改进, major=逻辑/结构问题。只返回严格 JSON。',
+              '你是中文写作编辑。分析用户给定的段落，找出 1-3 个最值得改进的局部问题。只做必要的局部编辑，不要重写整句。每条 original 必须是段落中已有的精确片段，replacement 应简洁，长度不要明显超过 original。避免主观润色，除非能明显提升清晰度或正确性。不允许重复或重叠建议。severity: minor=措辞微调, moderate=表达改进, major=逻辑/结构问题。只返回严格 JSON。',
           },
           {
             role: 'user',
-            content: `paragraphText:\n${paragraphText}\n\nfullContext（仅供参考，不要修改）:\n${fullContext || '无'}\n\n返回格式：{"suggestions":[{"original":"原文片段","replacement":"建议替换","reason":"原因","severity":"minor/moderate/major"}]}`,
+            content: `paragraphText:\n${paragraphText}\n\nfullContext（仅供参考，不要修改）:\n${fullContext || '无'}\n\n返回格式：{"suggestions":[{"original":"原文片段","replacement":"建议替换","reason":"原因","severity":"minor/moderate/major"}]}，最多 3 条。`,
           },
         ],
       }),
@@ -70,16 +70,30 @@ export default async function handler(req: any, res: any) {
     return
   }
 
-  const suggestions = Array.isArray(result?.suggestions)
-    ? result.suggestions.filter(
-        (s: any) =>
-          s.original &&
-          s.replacement &&
-          typeof s.original === 'string' &&
-          typeof s.replacement === 'string' &&
-          paragraphText.includes(s.original),
-      )
-    : []
+  const raw: any[] = Array.isArray(result?.suggestions) ? result.suggestions : []
+  const seen = new Set<string>()
+  const suggestions = raw
+    .map((s: any) => {
+      const original = typeof s.original === 'string' ? s.original.trim() : ''
+      const replacement = typeof s.replacement === 'string' ? s.replacement.trim() : ''
+      const reason = typeof s.reason === 'string' ? s.reason.trim() : ''
+      const severity =
+        s.severity === 'minor' || s.severity === 'moderate' || s.severity === 'major'
+          ? s.severity
+          : 'minor'
+      return { original, replacement, reason, severity }
+    })
+    .filter((s) => {
+      if (!s.original || !s.replacement) return false
+      if (s.original === s.replacement) return false
+      if (!paragraphText.includes(s.original)) return false
+      if (s.original.length > 4 && s.replacement.length > s.original.length * 2) return false
+      const key = `${s.original}__${s.replacement}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .slice(0, 3)
 
   res.status(200).json({ suggestions })
 }

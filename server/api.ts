@@ -522,6 +522,169 @@ async function handleIntentMap(req: http.IncomingMessage, res: http.ServerRespon
   })
 }
 
+// ─── Coherence Agent Cache ───
+
+const coherenceCache = new Map<string, { data: unknown; ts: number }>()
+const COHERENCE_CACHE_TTL = 10_000
+
+function coherenceCacheKey(paragraphs: { id: string; text: string }[]): string {
+  return paragraphs.map((p) => `${p.id}:${p.text.slice(0, 40)}`).join('|')
+}
+
+async function handleCoherenceAgent(req: http.IncomingMessage, res: http.ServerResponse) {
+  const body = JSON.parse(await readBody(req))
+  const { paragraphs, changedParagraphIds, previousGraph, previousDecisions } = body
+
+  if (!Array.isArray(paragraphs) || paragraphs.length === 0) {
+    return json(res, 400, { error: 'paragraphs is required' })
+  }
+
+  if (!DEEPSEEK_API_KEY) {
+    return json(res, 200, { graph: null, ghostSuggestions: [], structuralNudges: [] })
+  }
+
+  // Check cache
+  const key = coherenceCacheKey(paragraphs)
+  const cached = coherenceCache.get(key)
+  if (cached && Date.now() - cached.ts < COHERENCE_CACHE_TTL) {
+    return json(res, 200, cached.data)
+  }
+
+  const paragraphList = paragraphs
+    .map((p: any) => `[${p.id}]${p.heading ? ` (标题: ${p.heading})` : ''} ${p.text}`)
+    .join('\n\n')
+
+  let instruction = ''
+  if (previousGraph && Array.isArray(changedParagraphIds) && changedParagraphIds.length > 0 && changedParagraphIds.length <= 2) {
+    instruction = `\n\n增量更新模式：以下段落发生了变化：${changedParagraphIds.join(', ')}。请只重新分析这些段落及其相关的边，保持其他节点不变。返回完整的更新后图谱。`
+  }
+
+  let decisionsContext = ''
+  if (Array.isArray(previousDecisions) && previousDecisions.length > 0) {
+    const rejected = previousDecisions.filter((d: any) => !d.accepted).slice(0, 10)
+    if (rejected.length > 0) {
+      decisionsContext = `\n\n用户之前拒绝了这些建议（不要重复类似模式）：\n${rejected.map((d: any) => `- "${d.original}" → "${d.replacement}"`).join('\n')}`
+    }
+  }
+
+  const systemPrompt =
+    '你是一个中文写作结构编辑，不是代写助手。你的任务是分析文章的论证结构，帮助作者发现逻辑问题。\n\n' +
+    '你需要：\n' +
+    '1. 为每个段落识别其在论证中的角色（claim=论点, evidence=论据, counterargument=反论, transition=过渡, conclusion=结论）\n' +
+    '2. 评估每个论点的证据强度（strong/medium/weak）\n' +
+    '3. 检测段落间的逻辑关系（supports/contradicts/extends/weakens）\n' +
+    '4. 发现结构性问题：矛盾、论点缺乏论据、冗余、缺少结论\n' +
+    '5. 生成 0-3 条论证层面的幽灵文字建议（不是错别字，那是另一个系统负责的）\n\n' +
+    '只返回严格 JSON，不要输出 Markdown。'
+
+  const userMessage =
+    `文章段落：\n${paragraphList}${instruction}${decisionsContext}\n\n` +
+    '返回格式：\n' +
+    '{\n' +
+    '  "graph": {\n' +
+    '    "nodes": [{"id":"p_0","label":"论点摘要","paragraph":"对应段落片段","strength":"strong/medium/weak","role":"claim/evidence/counterargument/transition/conclusion","evidenceNote":"为什么强或弱"}],\n' +
+    '    "edges": [{"from":"p_0","to":"p_1","relation":"supports/contradicts/extends/weakens","explanation":"为什么有这个关系"}],\n' +
+    '    "summary":"文章整体结构判断",\n' +
+    '    "coherenceScore": 0.0到1.0之间的分数\n' +
+    '  },\n' +
+    '  "ghostSuggestions": [{"original":"原文片段","replacement":"建议替换","reason":"原因","severity":"minor/moderate/major","argumentContext":"这对论证的意义"}],\n' +
+    '  "structuralNudges": [{"type":"contradiction/gap/redundancy/unsupported_claim/missing_conclusion","message":"问题描述","relatedParagraphs":["p_0"],"severity":"low/medium/high"}]\n' +
+    '}\n\n' +
+    '连贯性评分标准：所有论点都有论据支撑(0.3) + 无矛盾(0.2) + 段落间逻辑流畅(0.2) + 结论覆盖所有论点(0.15) + 无冗余(0.15)。最多3条幽灵建议，最多3条结构提示。'
+
+  let result: any
+  try {
+    result = await callDeepSeek([
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userMessage },
+    ])
+  } catch {
+    return json(res, 200, { graph: null, ghostSuggestions: [], structuralNudges: [] })
+  }
+
+  if (!result) {
+    return json(res, 200, { graph: null, ghostSuggestions: [], structuralNudges: [] })
+  }
+
+  // Normalize graph
+  const normalizeGraph = (raw: any) => {
+    const nodes = Array.isArray(raw?.nodes)
+      ? raw.nodes.map((n: any) => ({
+          id: String(n.id || ''),
+          label: String(n.label || ''),
+          paragraph: String(n.paragraph || ''),
+          strength: ['strong', 'medium', 'weak'].includes(n.strength) ? n.strength : 'medium',
+          role: ['claim', 'evidence', 'counterargument', 'transition', 'conclusion'].includes(n.role)
+            ? n.role
+            : 'claim',
+          evidenceNote: typeof n.evidenceNote === 'string' ? n.evidenceNote : undefined,
+        }))
+      : []
+    const edges = Array.isArray(raw?.edges)
+      ? raw.edges.map((e: any) => ({
+          from: String(e.from || ''),
+          to: String(e.to || ''),
+          relation: ['supports', 'contradicts', 'extends', 'weakens', 'unrelated'].includes(e.relation)
+            ? e.relation
+            : 'unrelated',
+          explanation: typeof e.explanation === 'string' ? e.explanation : undefined,
+        }))
+      : []
+    const score = typeof raw?.coherenceScore === 'number' ? Math.min(1, Math.max(0, raw.coherenceScore)) : 0.5
+    return { nodes, edges, summary: String(raw?.summary || ''), coherenceScore: score }
+  }
+
+  const normalizeNudges = (raw: any) => {
+    if (!Array.isArray(raw)) return []
+    return raw
+      .map((n: any) => ({
+        type: ['contradiction', 'gap', 'redundancy', 'unsupported_claim', 'missing_conclusion'].includes(n.type)
+          ? n.type
+          : 'gap',
+        message: String(n.message || ''),
+        relatedParagraphs: Array.isArray(n.relatedParagraphs) ? n.relatedParagraphs.map(String) : [],
+        severity: ['low', 'medium', 'high'].includes(n.severity) ? n.severity : 'medium',
+      }))
+      .filter((n: any) => n.message.length > 0)
+  }
+
+  const allText = paragraphs.map((p: any) => p.text).join('\n')
+  const normalizeSuggestions = (raw: any) => {
+    if (!Array.isArray(raw)) return []
+    return raw
+      .map((s: any) => {
+        const original = typeof s.original === 'string' ? s.original.trim() : ''
+        const replacement = typeof s.replacement === 'string' ? s.replacement.trim() : ''
+        if (!original || !replacement || original === replacement) return null
+        if (!allText.includes(original)) return null
+        return {
+          original,
+          replacement,
+          reason: String(s.reason || ''),
+          severity: ['minor', 'moderate', 'major'].includes(s.severity) ? s.severity : 'minor',
+          argumentContext: typeof s.argumentContext === 'string' ? s.argumentContext : undefined,
+        }
+      })
+      .filter(Boolean)
+  }
+
+  const responseData = {
+    graph: result.graph ? normalizeGraph(result.graph) : null,
+    ghostSuggestions: normalizeSuggestions(result.ghostSuggestions),
+    structuralNudges: normalizeNudges(result.structuralNudges),
+  }
+
+  coherenceCache.set(key, { data: responseData, ts: Date.now() })
+  if (coherenceCache.size > 50) {
+    const now = Date.now()
+    for (const [k, v] of coherenceCache) {
+      if (now - v.ts > COHERENCE_CACHE_TTL) coherenceCache.delete(k)
+    }
+  }
+
+  json(res, 200, responseData)
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
@@ -537,7 +700,10 @@ const server = http.createServer(async (req, res) => {
     return json(res, 405, { error: 'Method not allowed' })
   }
 
-  if (!DASHSCOPE_API_KEY) {
+  // Endpoints that only need DEEPSEEK_API_KEY
+  const deepseekOnlyRoutes = ['/api/revision/ghost-scan', '/api/revision/intent-map', '/api/revision/coherence-agent']
+
+  if (!deepseekOnlyRoutes.includes(req.url ?? '') && !DASHSCOPE_API_KEY) {
     return json(res, 500, { error: 'DASHSCOPE_API_KEY is not configured in .env' })
   }
 
@@ -554,6 +720,8 @@ const server = http.createServer(async (req, res) => {
       await handleGhostScan(req, res)
     } else if (req.url === '/api/revision/intent-map') {
       await handleIntentMap(req, res)
+    } else if (req.url === '/api/revision/coherence-agent') {
+      await handleCoherenceAgent(req, res)
     } else {
       json(res, 404, { error: 'Not found' })
     }

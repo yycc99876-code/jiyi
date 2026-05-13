@@ -2,11 +2,14 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Editor } from '@tiptap/react'
 import { Sparkles } from 'lucide-react'
 import { scanParagraph, type GhostSuggestion } from '../../services/ai/ghostScanner'
+import type { CoherenceGhostSuggestion } from '../../services/ai/coherenceTypes'
 
 interface GhostWithRect extends GhostSuggestion {
   rect: { top: number; left: number; width: number; height: number }
   id: string
   paragraphText: string
+  isCoherence?: boolean
+  argumentContext?: string
 }
 
 export interface GhostUiSuggestion extends GhostSuggestion {
@@ -30,6 +33,7 @@ interface Props {
   editor: Editor
   containerRef: React.RefObject<HTMLDivElement | null>
   onStateChange?: (state: GhostConsoleState) => void
+  coherenceSuggestions?: CoherenceGhostSuggestion[]
 }
 
 function getParagraphAtCursor(editor: Editor): HTMLElement | null {
@@ -89,7 +93,7 @@ function extractParagraphText(el: HTMLElement): string {
   return (el.textContent ?? '').trim()
 }
 
-export default function GhostOverlay({ editor, containerRef, onStateChange }: Props) {
+export default function GhostOverlay({ editor, containerRef, onStateChange, coherenceSuggestions = [] }: Props) {
   const [ghosts, setGhosts] = useState<GhostWithRect[]>([])
   const [activeIdx, setActiveIdx] = useState(-1)
   const [loading, setLoading] = useState(false)
@@ -246,6 +250,9 @@ export default function GhostOverlay({ editor, containerRef, onStateChange }: Pr
     setActiveIdx(max < 0 ? -1 : Math.min(Math.max(index, 0), max))
   }, [])
 
+  const coherenceRef = useRef(coherenceSuggestions)
+  useEffect(() => { coherenceRef.current = coherenceSuggestions }, [coherenceSuggestions])
+
   const scanRef = useRef<() => void>(() => {})
 
   const scanCurrentParagraph = useCallback(async () => {
@@ -361,16 +368,38 @@ export default function GhostOverlay({ editor, containerRef, onStateChange }: Pr
     return () => { container.removeEventListener('scroll', recalc); window.removeEventListener('resize', recalc) }
   }, [editor, containerRef, ghosts.length, recalcRects])
 
-  if (ghosts.length === 0 && !loading) return null
+  // Merge coherence suggestions with fast-path ghosts
+  const mergedGhosts = [...ghosts]
+  const container = containerRef.current
+  const currentParagraph = container ? getParagraphAtCursor(editor) : null
+  if (currentParagraph && coherenceSuggestions.length > 0) {
+    const paraText = extractParagraphText(currentParagraph)
+    const existingOriginals = new Set(ghosts.map((g) => g.original))
+    for (const cs of coherenceSuggestions) {
+      if (!paraText.includes(cs.original)) continue
+      if (existingOriginals.has(cs.original)) continue
+      const rect = container ? findGhostRects(currentParagraph, cs.original, container) : null
+      if (!rect) continue
+      mergedGhosts.push({
+        ...cs,
+        rect,
+        id: `coh_${cs.original}__${cs.replacement}`,
+        paragraphText: paraText,
+        isCoherence: true,
+      })
+    }
+  }
 
-  const activeGhost = activeIdx >= 0 ? ghosts[activeIdx] : null
+  if (mergedGhosts.length === 0 && !loading) return null
+
+  const activeGhost = activeIdx >= 0 && activeIdx < mergedGhosts.length ? mergedGhosts[activeIdx] : null
 
   return (
     <>
-      {ghosts.map((ghost, i) => (
+      {mergedGhosts.map((ghost, i) => (
         <div
           key={ghost.id}
-          className={`ghost-range ${i === activeIdx ? 'active' : ''} ${ghost.severity}`}
+          className={`ghost-range ${i === activeIdx ? 'active' : ''} ${ghost.severity} ${(ghost as any).isCoherence ? 'coherence' : ''}`}
           style={{
             top: ghost.rect.top,
             left: ghost.rect.left,
@@ -380,8 +409,11 @@ export default function GhostOverlay({ editor, containerRef, onStateChange }: Pr
         >
           {activeGhost?.id === ghost.id && (
             <div className="ghost-inline-preview">
-              <span>建议</span>
+              <span>{(ghost as any).isCoherence ? '论证' : '建议'}</span>
               <strong>{ghost.replacement}</strong>
+              {(ghost as any).argumentContext && (
+                <em className="ghost-argument-context">{(ghost as any).argumentContext}</em>
+              )}
             </div>
           )}
         </div>

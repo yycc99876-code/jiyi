@@ -12,6 +12,7 @@ import {
   Download,
   FilePlus,
   FileText,
+  LayoutGrid,
   Loader2,
   Map,
   Moon,
@@ -19,15 +20,19 @@ import {
   RotateCcw,
   Sparkles,
   Sun,
+  Trash2,
   Upload,
   Wand2,
   X,
+  Zap,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import RevisionPanel from './components/revision/RevisionPanel'
 import GhostOverlay from './components/ghost/GhostOverlay'
 import type { GhostConsoleState } from './components/ghost/GhostOverlay'
 import IntentPanel from './components/intent/IntentPanel'
+import ArgumentCanvas from './components/canvas/ArgumentCanvas'
+import useCoherenceAgent from './hooks/useCoherenceAgent'
 import {
   importFile,
   exportTxt,
@@ -35,6 +40,18 @@ import {
   exportDocx,
   exportDoc,
 } from './services/file/fileService'
+import {
+  getAllDocuments,
+  getDocument,
+  getOrCreateDefault,
+  createDocument,
+  updateDocument,
+  deleteDocument,
+  setActiveDocId,
+  compact,
+} from './services/documentStore'
+import type { StoredDocument } from './services/documentStore'
+import type { ArgumentGraph, StructuralNudge } from './services/ai/coherenceTypes'
 
 type RevisionStatus = 'pending' | 'accepted' | 'ignored'
 
@@ -84,34 +101,15 @@ const emptyGhostConsole: GhostConsoleState = {
   setActiveIndex: () => {},
 }
 
-const storageKeys = {
-  document: 'revision-lens-document',
-  history: 'revision-lens-history',
-  theme: 'revision-lens-theme',
-}
-
-const sampleDocument = `
-<h1>AI 写作工具应该如何真正帮助用户</h1>
-<p>很多 AI 写作产品现在都可以帮助用户更好地完成内容创作，并提升工作效率。但是这些产品经常会直接生成一大段内容，用户很难判断哪些地方是真的有帮助，哪些地方只是看起来更流畅。</p>
-<p>我希望做一个更自然的编辑器体验，让 AI 不只是替用户写东西，而是在合适的时候给出建议。这个产品可以帮助用户管理自己的想法，并让写作过程变得更加高效。</p>
-<p>真正好的 AI Writing 产品应该尊重用户原本的表达，理解用户正在写什么，并在需要的时候提供可以被用户控制的修改。</p>
-`
-
-function getStoredDocument() {
-  return window.localStorage.getItem(storageKeys.document) ?? sampleDocument
-}
+const THEME_KEY = 'revision-lens-theme'
+const HISTORY_KEY = 'revision-lens-history'
 
 function getStoredHistory(): HistoryItem[] {
   try {
-    return JSON.parse(window.localStorage.getItem(storageKeys.history) ?? '[]')
+    return JSON.parse(window.localStorage.getItem(HISTORY_KEY) ?? '[]')
   } catch {
     return []
   }
-}
-
-function compact(text: string, size = 44) {
-  const clean = text.replace(/\s+/g, ' ').trim()
-  return clean.length > size ? `${clean.slice(0, size)}...` : clean
 }
 
 function normalizeAnalysis(analysis: Analysis): Analysis {
@@ -292,9 +290,12 @@ function DiffView({ original, replacement }: { original: string; replacement: st
 function App() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [selection, setSelection] = useState<SelectionSnapshot | null>(null)
+  const [documents, setDocuments] = useState<StoredDocument[]>([])
+  const [activeDocId, setActiveDocIdState] = useState<string | null>(null)
   const [history, setHistory] = useState<HistoryItem[]>([])
-  const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null)
+  const [leftTab, setLeftTab] = useState<'docs' | 'history'>('docs')
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [darkMode, setDarkMode] = useState(false)
   const [saveState, setSaveState] = useState('已保存')
   const [selectedCount, setSelectedCount] = useState(0)
@@ -303,9 +304,14 @@ function App() {
   const [exportMenuOpen, setExportMenuOpen] = useState(false)
   const [autoStartVoice, setAutoStartVoice] = useState(false)
   const [rightTab, setRightTab] = useState<'ghost' | 'intent' | 'lens'>('ghost')
+  const [canvasMode, setCanvasMode] = useState(false)
   const [ghostConsole, setGhostConsole] = useState<GhostConsoleState>(emptyGhostConsole)
   const editorCardRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const switchingDocRef = useRef(false)
+
+  // Initialize: load document list and active doc
+  const activeDoc = documents.find((d) => d.id === activeDocId) ?? null
 
   const editor = useEditor({
     extensions: [
@@ -314,7 +320,7 @@ function App() {
         placeholder: '写一点内容，然后选中一段文字启动 Revision Lens...',
       }),
     ],
-    content: typeof window !== 'undefined' ? getStoredDocument() : sampleDocument,
+    content: activeDoc?.content ?? '<p></p>',
     editorProps: {
       attributes: {
         class: 'editor-prose',
@@ -325,20 +331,54 @@ function App() {
       setSelectedCount(empty ? 0 : editor.state.doc.textBetween(from, to, '').trim().length)
     },
     onUpdate: ({ editor }) => {
+      if (switchingDocRef.current) return
       setSaveState('保存中')
-      window.localStorage.setItem(storageKeys.document, editor.getHTML())
+      const html = editor.getHTML()
+      if (activeDocId) {
+        updateDocument(activeDocId, { content: html })
+        // Update local documents state
+        setDocuments((docs) =>
+          docs.map((d) => (d.id === activeDocId ? { ...d, content: html, updatedAt: Date.now() } : d)),
+        )
+      }
       window.setTimeout(() => setSaveState('已保存'), 280)
     },
   })
 
+  const handleGraphUpdate = useCallback(
+    (graph: ArgumentGraph, nudges: StructuralNudge[]) => {
+      if (activeDocId) {
+        updateDocument(activeDocId, { graph, nudges })
+        setDocuments((docs) =>
+          docs.map((d) =>
+            d.id === activeDocId ? { ...d, graph, nudges, updatedAt: Date.now() } : d,
+          ),
+        )
+      }
+    },
+    [activeDocId],
+  )
+
+  const coherence = useCoherenceAgent(editor, {
+    initialGraph: activeDoc?.graph ?? null,
+    initialNudges: activeDoc?.nudges ?? [],
+    onGraphUpdate: handleGraphUpdate,
+  })
+
+  // Initialize on mount
   useEffect(() => {
+    const { doc } = getOrCreateDefault()
+    const docs = getAllDocuments()
+    setDocuments(docs)
+    setActiveDocIdState(doc.id)
+    setActiveDocId(doc.id)
     setHistory(getStoredHistory())
-    setDarkMode(window.localStorage.getItem(storageKeys.theme) === 'dark')
+    setDarkMode(window.localStorage.getItem(THEME_KEY) === 'dark')
   }, [])
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', darkMode)
-    window.localStorage.setItem(storageKeys.theme, darkMode ? 'dark' : 'light')
+    window.localStorage.setItem(THEME_KEY, darkMode ? 'dark' : 'light')
   }, [darkMode])
 
   useEffect(() => {
@@ -398,10 +438,16 @@ function App() {
 
       const nextHistory = [item, ...history].slice(0, 12)
       setHistory(nextHistory)
-      window.localStorage.setItem(storageKeys.history, JSON.stringify(nextHistory))
+      window.localStorage.setItem(HISTORY_KEY, JSON.stringify(nextHistory))
     } finally {
       setIsAnalyzing(false)
     }
+  }
+
+  const clearHistory = () => {
+    setHistory([])
+    setActiveHistoryId(null)
+    window.localStorage.removeItem(HISTORY_KEY)
   }
 
   const openRevisionPanel = () => {
@@ -446,32 +492,128 @@ function App() {
     updateRevisionStatus(revision.id, 'accepted')
   }
 
-  const resetDocument = () => {
-    editor?.commands.setContent(sampleDocument)
-    window.localStorage.setItem(storageKeys.document, sampleDocument)
+  const switchDocument = useCallback(
+    (docId: string) => {
+      if (docId === activeDocId) return
+      if (!editor) return
+
+      // Save current document content first
+      if (activeDocId) {
+        updateDocument(activeDocId, { content: editor.getHTML() })
+      }
+
+      switchingDocRef.current = true
+      const target = getDocument(docId)
+      if (!target) {
+        switchingDocRef.current = false
+        return
+      }
+
+      setActiveDocId(docId)
+      setActiveDocIdState(docId)
+      editor.commands.setContent(target.content)
+      setAnalysis(null)
+      setSelection(null)
+
+      // Update local docs state
+      setDocuments(getAllDocuments())
+
+      // Release guard after editor processes the content change
+      requestAnimationFrame(() => {
+        switchingDocRef.current = false
+      })
+    },
+    [editor, activeDocId],
+  )
+
+  const newDocument = useCallback(() => {
+    if (!editor) return
+
+    // Save current doc
+    if (activeDocId) {
+      updateDocument(activeDocId, { content: editor.getHTML() })
+    }
+
+    const doc = createDocument('<p></p>')
+    setDocuments(getAllDocuments())
+    setActiveDocIdState(doc.id)
+
+    switchingDocRef.current = true
+    editor.commands.setContent('<p></p>')
     setAnalysis(null)
     setSelection(null)
-  }
+    requestAnimationFrame(() => {
+      switchingDocRef.current = false
+    })
+  }, [editor, activeDocId])
 
-  const newDocument = () => {
-    editor?.commands.setContent('<p></p>')
-    window.localStorage.setItem(storageKeys.document, '<p></p>')
+  const deleteDoc = useCallback(
+    (docId: string) => {
+      deleteDocument(docId)
+      const docs = getAllDocuments()
+      setDocuments(docs)
+
+      // If deleted the active doc, switch to the most recent
+      if (docId === activeDocId && docs.length > 0) {
+        switchDocument(docs[0].id)
+      } else if (docs.length === 0) {
+        // No docs left, create a new one
+        const doc = createDocument('<p></p>')
+        setDocuments(getAllDocuments())
+        setActiveDocIdState(doc.id)
+        if (editor) {
+          switchingDocRef.current = true
+          editor.commands.setContent('<p></p>')
+          requestAnimationFrame(() => {
+            switchingDocRef.current = false
+          })
+        }
+      }
+    },
+    [activeDocId, editor, switchDocument],
+  )
+
+  const resetDocument = useCallback(() => {
+    if (!editor) return
+    const sample = `<h1>AI 写作工具应该如何真正帮助用户</h1>
+<p>很多 AI 写作产品现在都可以帮助用户更好地完成内容创作，并提升工作效率。但是这些产品经常会直接生成一大段内容，用户很难判断哪些地方是真的有帮助，哪些地方只是看起来更流畅。</p>
+<p>我希望做一个更自然的编辑器体验，让 AI 不只是替用户写东西，而是在合适的时候给出建议。这个产品可以帮助用户管理自己的想法，并让写作过程变得更加高效。</p>
+<p>真正好的 AI Writing 产品应该尊重用户原本的表达，理解用户正在写什么，并在需要的时候提供可以被用户控制的修改。</p>`
+
+    if (activeDocId) {
+      updateDocument(activeDocId, { content: sample })
+      setDocuments(getAllDocuments())
+    }
+    switchingDocRef.current = true
+    editor.commands.setContent(sample)
     setAnalysis(null)
     setSelection(null)
-  }
-
-  const clearHistory = () => {
-    setHistory([])
-    setActiveHistoryId(null)
-    window.localStorage.removeItem(storageKeys.history)
-  }
+    requestAnimationFrame(() => {
+      switchingDocRef.current = false
+    })
+  }, [editor, activeDocId])
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file || !editor) return
     try {
       const { html } = await importFile(file)
+      // Save current doc
+      if (activeDocId) {
+        updateDocument(activeDocId, { content: editor.getHTML() })
+      }
+      // Create new doc with imported content
+      const doc = createDocument(html)
+      setDocuments(getAllDocuments())
+      setActiveDocIdState(doc.id)
+
+      switchingDocRef.current = true
       editor.commands.setContent(html)
+      setAnalysis(null)
+      setSelection(null)
+      requestAnimationFrame(() => {
+        switchingDocRef.current = false
+      })
     } catch (err: any) {
       alert(err.message)
     }
@@ -579,6 +721,14 @@ function App() {
             示例文本
           </button>
           <button
+            className={`ghost-button ${canvasMode ? 'active' : ''}`}
+            onClick={() => setCanvasMode(true)}
+            type="button"
+          >
+            <LayoutGrid size={15} />
+            画布
+          </button>
+          <button
             aria-label="切换深色模式"
             className="icon-button"
             onClick={() => setDarkMode((value) => !value)}
@@ -590,55 +740,157 @@ function App() {
       </section>
 
       <section className="workspace">
-        <aside className="history-panel panel">
+        <aside className="doc-panel panel">
           <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Session</p>
-              <h2>诊断历史</h2>
+            <div className="panel-tabs">
+              <button
+                className={`panel-tab ${leftTab === 'docs' ? 'active' : ''}`}
+                onClick={() => setLeftTab('docs')}
+                type="button"
+              >
+                <FileText size={13} />
+                文章
+              </button>
+              <button
+                className={`panel-tab ${leftTab === 'history' ? 'active' : ''}`}
+                onClick={() => setLeftTab('history')}
+                type="button"
+              >
+                <Clock3 size={13} />
+                历史
+              </button>
             </div>
-            {history.length > 0 && (
+            {leftTab === 'docs' && (
+              <button className="text-button" onClick={newDocument} type="button">
+                <FilePlus size={13} />
+                新建
+              </button>
+            )}
+            {leftTab === 'history' && history.length > 0 && (
               <button className="text-button" onClick={clearHistory} type="button">
                 清空
               </button>
             )}
           </div>
 
-          <div className="history-list">
-            {history.length === 0 ? (
-              <div className="empty-history">
-                <Clock3 size={19} />
-                <p>完成一次诊断后，这里会保存记录。</p>
-              </div>
-            ) : (
-              history.map((item) => (
-                <button
-                  className={`history-item ${activeHistoryId === item.id ? 'active' : ''}`}
-                  key={item.id}
-                  onClick={() => {
-                    setActiveHistoryId(item.id)
-                    setAnalysis(item.analysis)
-                  }}
-                  type="button"
-                >
-                  <span>
-                    {new Date(item.createdAt).toLocaleTimeString('zh-CN', {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </span>
-                  <strong>{item.excerpt}</strong>
-                  <ChevronRight size={15} />
-                </button>
-              ))
-            )}
-          </div>
+          {leftTab === 'docs' ? (
+            <div className="doc-list">
+              {documents.length === 0 ? (
+                <div className="empty-doc-list">
+                  <FileText size={19} />
+                  <p>还没有文章，点击新建开始写作。</p>
+                </div>
+              ) : (
+                documents.map((doc) => {
+                  const title = doc.title || '未命名文档'
+                  const preview = doc.content.replace(/<[^>]+>/g, '').trim().slice(0, 60)
+                  const date = new Date(doc.updatedAt)
+                  const timeStr = date.toLocaleDateString('zh-CN', {
+                    month: 'short',
+                    day: 'numeric',
+                  })
+                  const hasGraph = !!doc.graph
+
+                  return (
+                    <div
+                      className={`doc-item ${doc.id === activeDocId ? 'active' : ''}`}
+                      key={doc.id}
+                    >
+                      <button
+                        className="doc-item-main"
+                        onClick={() => switchDocument(doc.id)}
+                        type="button"
+                      >
+                        <div className="doc-item-header">
+                          <strong className="doc-item-title">{title}</strong>
+                          <span className="doc-item-date">{timeStr}</span>
+                        </div>
+                        {preview && <p className="doc-item-preview">{preview}</p>}
+                        <div className="doc-item-meta">
+                          {hasGraph && (
+                            <span className="doc-item-badge">
+                              <Zap size={10} />
+                              {Math.round(doc.graph!.coherenceScore * 100)}%
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                      <button
+                        className="doc-item-delete"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (documents.length <= 1) return
+                          deleteDoc(doc.id)
+                        }}
+                        title="删除文档"
+                        type="button"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          ) : (
+            <div className="history-list">
+              {history.length === 0 ? (
+                <div className="empty-doc-list">
+                  <Clock3 size={19} />
+                  <p>完成一次诊断后，这里会保存记录。</p>
+                </div>
+              ) : (
+                history.map((item) => (
+                  <button
+                    className={`history-item ${activeHistoryId === item.id ? 'active' : ''}`}
+                    key={item.id}
+                    onClick={() => {
+                      setActiveHistoryId(item.id)
+                      setAnalysis(item.analysis)
+                    }}
+                    type="button"
+                  >
+                    <span>
+                      {new Date(item.createdAt).toLocaleTimeString('zh-CN', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                    <strong>{item.excerpt}</strong>
+                    <ChevronRight size={15} />
+                  </button>
+                ))
+              )}
+            </div>
+          )}
         </aside>
 
         <section className="editor-panel panel">
           <div className="editor-header">
             <div>
               <p className="eyebrow">Document</p>
-              <h1>中文 AI 局部改写编辑器</h1>
+              <h1
+                contentEditable
+                suppressContentEditableWarning
+                spellCheck={false}
+                className="doc-title-editable"
+                onBlur={(e) => {
+                  const newTitle = e.currentTarget.textContent?.trim() || ''
+                  if (activeDocId && newTitle && newTitle !== activeDoc?.title) {
+                    updateDocument(activeDocId, { title: newTitle })
+                    setDocuments(getAllDocuments())
+                  } else if (!newTitle && activeDocId) {
+                    e.currentTarget.textContent = activeDoc?.title || '未命名文档'
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    e.currentTarget.blur()
+                  }
+                }}
+                dangerouslySetInnerHTML={{ __html: activeDoc?.title || '未命名文档' }}
+              />
             </div>
             <div className="editor-stats">
               <FileText size={15} />
@@ -682,13 +934,27 @@ function App() {
                 editor={editor}
                 containerRef={editorCardRef}
                 onStateChange={setGhostConsole}
+                coherenceSuggestions={coherence.coherenceGhostSuggestions}
               />
             )}
           </div>
 
           <div className="editor-footer">
             <span>选中任意一段中文，使用 Revision Lens 查看可解释的修改建议。</span>
-            {selectedCount > 0 && <strong>已选中 {selectedCount} 字</strong>}
+            <div className="editor-footer-right">
+              {coherence.isEnabled && coherence.graph && (
+                <button
+                  type="button"
+                  className="coherence-pill"
+                  onClick={() => setRightTab('intent')}
+                  title="查看连贯性分析"
+                >
+                  <Zap size={12} />
+                  连贯性 {Math.round(coherence.graph.coherenceScore * 100)}%
+                </button>
+              )}
+              {selectedCount > 0 && <strong>已选中 {selectedCount} 字</strong>}
+            </div>
           </div>
         </section>
 
@@ -709,7 +975,7 @@ function App() {
                 type="button"
               >
                 <Map size={14} />
-                意图空间
+                连贯性
               </button>
               <button
                 className={`panel-tab ${rightTab === 'lens' ? 'active' : ''}`}
@@ -813,7 +1079,20 @@ function App() {
               </div>
             )
           ) : rightTab === 'intent' ? (
-            <IntentPanel fullText={editor?.getText() ?? ''} onNodeClick={handleIntentNodeClick} />
+            <IntentPanel
+              graph={coherence.graph}
+              nudges={coherence.nudges}
+              isScanning={coherence.isScanning}
+              isEnabled={coherence.isEnabled}
+              scanStage={coherence.scanStage}
+              scanError={coherence.scanError}
+              lastScannedAt={coherence.lastScannedAt}
+              onScanNow={coherence.scanNow}
+              onNodeClick={handleIntentNodeClick}
+              onChallengeEdge={coherence.challengeEdge}
+              onStrengthenNode={coherence.strengthenNode}
+              onDismissNudge={coherence.dismissNudge}
+            />
           ) : isAnalyzing ? (
             <div className="loading-state">
               <Loader2 className="spin" size={24} />
@@ -897,6 +1176,16 @@ function App() {
           )}
         </aside>
       </section>
+
+      {canvasMode && (
+        <ArgumentCanvas
+          graph={coherence.graph}
+          nudges={coherence.nudges}
+          isScanning={coherence.isScanning}
+          onClose={() => setCanvasMode(false)}
+          onNodeClick={handleIntentNodeClick}
+        />
+      )}
     </main>
   )
 }

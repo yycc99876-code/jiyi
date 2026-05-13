@@ -373,6 +373,83 @@ async function handleTranscribe(req: http.IncomingMessage, res: http.ServerRespo
   json(res, 200, { text })
 }
 
+interface Suggestion {
+  original: string
+  replacement: string
+  reason: string
+  severity: 'minor' | 'moderate' | 'major'
+}
+
+const HARD_ERROR_RULES: { pattern: string; replacement: string; reason: string; severity: 'moderate' | 'major' }[] = [
+  {
+    pattern: '更束缚',
+    replacement: '更流畅',
+    reason: '"束缚"表示限制，不适合搭配"看起来"；此处应为"更流畅"，形容表达顺畅',
+    severity: 'major',
+  },
+  {
+    pattern: '帮主',
+    replacement: '帮助',
+    reason: '错别字：帮主应为帮助',
+    severity: 'major',
+  },
+  {
+    pattern: 'dan是',
+    replacement: '但是',
+    reason: '拼音输入未转换：应为"但是"',
+    severity: 'major',
+  },
+  {
+    pattern: '更好的进行',
+    replacement: '更好地进行',
+    reason: '修饰动词"进行"应用副词"地"而非"的"',
+    severity: 'moderate',
+  },
+]
+
+function detectHardErrors(text: string): Suggestion[] {
+  const results: Suggestion[] = []
+  for (const rule of HARD_ERROR_RULES) {
+    if (text.includes(rule.pattern)) {
+      results.push({
+        original: rule.pattern,
+        replacement: rule.replacement,
+        reason: rule.reason,
+        severity: rule.severity,
+      })
+    }
+  }
+  return results
+}
+
+function normalizeSuggestions(items: any[], paragraphText: string): Suggestion[] {
+  const seen = new Set<string>()
+  const results: Suggestion[] = []
+
+  for (const s of items) {
+    const original = typeof s.original === 'string' ? s.original.trim() : ''
+    const replacement = typeof s.replacement === 'string' ? s.replacement.trim() : ''
+    const reason = typeof s.reason === 'string' ? s.reason.trim() : ''
+    const severity =
+      s.severity === 'minor' || s.severity === 'moderate' || s.severity === 'major'
+        ? s.severity
+        : 'minor'
+
+    if (!original || !replacement) continue
+    if (original === replacement) continue
+    if (!paragraphText.includes(original)) continue
+    if (original.length > 4 && replacement.length > original.length * 2) continue
+
+    const key = `${original}__${replacement}`
+    if (seen.has(key)) continue
+    seen.add(key)
+
+    results.push({ original, replacement, reason, severity })
+  }
+
+  return results
+}
+
 async function handleGhostScan(req: http.IncomingMessage, res: http.ServerResponse) {
   const body = JSON.parse(await readBody(req))
   const { paragraphText, fullContext } = body
@@ -381,53 +458,32 @@ async function handleGhostScan(req: http.IncomingMessage, res: http.ServerRespon
     return json(res, 400, { error: 'paragraphText is required' })
   }
 
-  if (!DEEPSEEK_API_KEY) {
-    return json(res, 500, { error: 'DEEPSEEK_API_KEY is not configured' })
+  const hardErrors = detectHardErrors(paragraphText)
+
+  let modelRaw: any[] = []
+  if (DEEPSEEK_API_KEY) {
+    try {
+      const result = await callDeepSeek([
+        {
+          role: 'system',
+          content:
+            '你是中文写作编辑。分析用户给定的段落，找出 1-3 个最值得改进的局部问题。优先发现错别字、搭配错误、拼音/输入法残留等硬性问题，其次才是风格润色。只做必要的局部编辑，不要重写整句。每条 original 必须是段落中已有的精确片段，replacement 应简洁，长度不要明显超过 original。避免主观润色，除非能明显提升清晰度或正确性。不允许重复或重叠建议。severity: minor=措辞微调, moderate=表达改进, major=逻辑/结构/硬性问题。只返回严格 JSON。',
+        },
+        {
+          role: 'user',
+          content: `paragraphText:\n${paragraphText}\n\nfullContext（仅供参考，不要修改）:\n${fullContext || '无'}\n\n返回格式：{"suggestions":[{"original":"原文片段","replacement":"建议替换","reason":"原因","severity":"minor/moderate/major"}]}，最多 3 条。`,
+        },
+      ])
+      modelRaw = Array.isArray(result?.suggestions) ? result.suggestions : []
+    } catch {
+      // Model call failed; fall through to return hard errors only
+    }
   }
 
-  let result
-  try {
-    result = await callDeepSeek([
-      {
-        role: 'system',
-        content:
-          '你是中文写作编辑。分析用户给定的段落，找出 1-3 个最值得改进的局部问题。只做必要的局部编辑，不要重写整句。每条 original 必须是段落中已有的精确片段，replacement 应简洁，长度不要明显超过 original。避免主观润色，除非能明显提升清晰度或正确性。不允许重复或重叠建议。severity: minor=措辞微调, moderate=表达改进, major=逻辑/结构问题。只返回严格 JSON。',
-      },
-      {
-        role: 'user',
-        content: `paragraphText:\n${paragraphText}\n\nfullContext（仅供参考，不要修改）:\n${fullContext || '无'}\n\n返回格式：{"suggestions":[{"original":"原文片段","replacement":"建议替换","reason":"原因","severity":"minor/moderate/major"}]}，最多 3 条。`,
-      },
-    ])
-  } catch {
-    return json(res, 200, { suggestions: [] })
-  }
+  const modelSuggestions = normalizeSuggestions(modelRaw, paragraphText)
+  const merged = normalizeSuggestions([...hardErrors, ...modelSuggestions], paragraphText)
 
-  const raw: any[] = Array.isArray(result?.suggestions) ? result.suggestions : []
-  const seen = new Set<string>()
-  const suggestions = raw
-    .map((s: any) => {
-      const original = typeof s.original === 'string' ? s.original.trim() : ''
-      const replacement = typeof s.replacement === 'string' ? s.replacement.trim() : ''
-      const reason = typeof s.reason === 'string' ? s.reason.trim() : ''
-      const severity =
-        s.severity === 'minor' || s.severity === 'moderate' || s.severity === 'major'
-          ? s.severity
-          : 'minor'
-      return { original, replacement, reason, severity }
-    })
-    .filter((s) => {
-      if (!s.original || !s.replacement) return false
-      if (s.original === s.replacement) return false
-      if (!paragraphText.includes(s.original)) return false
-      if (s.original.length > 4 && s.replacement.length > s.original.length * 2) return false
-      const key = `${s.original}__${s.replacement}`
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
-    .slice(0, 3)
-
-  json(res, 200, { suggestions })
+  json(res, 200, { suggestions: merged.slice(0, 3) })
 }
 
 async function handleIntentMap(req: http.IncomingMessage, res: http.ServerResponse) {

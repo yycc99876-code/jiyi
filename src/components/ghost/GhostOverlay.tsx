@@ -8,9 +8,24 @@ interface GhostWithRect extends GhostSuggestion {
   id: string
 }
 
+export interface GhostUiSuggestion extends GhostSuggestion {
+  id: string
+}
+
+export interface GhostConsoleState {
+  suggestions: GhostUiSuggestion[]
+  activeIndex: number
+  loading: boolean
+  acceptCurrent: () => void
+  acceptSuggestion: (id: string) => void
+  clearSuggestions: () => void
+  setActiveIndex: (index: number) => void
+}
+
 interface Props {
   editor: Editor
   containerRef: React.RefObject<HTMLDivElement | null>
+  onStateChange?: (state: GhostConsoleState) => void
 }
 
 function getParagraphAtCursor(editor: Editor): HTMLElement | null {
@@ -70,7 +85,7 @@ function extractParagraphText(el: HTMLElement): string {
   return (el.textContent ?? '').trim()
 }
 
-export default function GhostOverlay({ editor, containerRef }: Props) {
+export default function GhostOverlay({ editor, containerRef, onStateChange }: Props) {
   const [ghosts, setGhosts] = useState<GhostWithRect[]>([])
   const [activeIdx, setActiveIdx] = useState(-1)
   const [loading, setLoading] = useState(false)
@@ -131,6 +146,27 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
     setTimeout(() => scanRef.current(), 300)
   }, [])
 
+  const acceptCurrent = useCallback(() => {
+    const g = ghostsRef.current
+    const idx = activeIdxRef.current >= 0 ? activeIdxRef.current : 0
+    if (idx >= 0 && idx < g.length) doAccept(g[idx])
+  }, [doAccept])
+
+  const acceptSuggestion = useCallback((id: string) => {
+    const ghost = ghostsRef.current.find((g) => g.id === id)
+    if (ghost) doAccept(ghost)
+  }, [doAccept])
+
+  const clearSuggestions = useCallback(() => {
+    setGhosts([])
+    setActiveIdx(-1)
+  }, [])
+
+  const setActiveIndex = useCallback((index: number) => {
+    const max = ghostsRef.current.length - 1
+    setActiveIdx(max < 0 ? -1 : Math.min(Math.max(index, 0), max))
+  }, [])
+
   const scanRef = useRef<() => void>(() => {})
 
   const scanCurrentParagraph = useCallback(async () => {
@@ -155,6 +191,19 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
   }, [editor, containerRef, recalcRects])
 
   scanRef.current = scanCurrentParagraph
+
+  useEffect(() => {
+    if (!onStateChange) return
+    onStateChange({
+      suggestions: ghosts.map(({ id, original, replacement, reason, severity }) => ({ id, original, replacement, reason, severity })),
+      activeIndex: activeIdx,
+      loading,
+      acceptCurrent,
+      acceptSuggestion,
+      clearSuggestions,
+      setActiveIndex,
+    })
+  }, [ghosts, activeIdx, loading, onStateChange, acceptCurrent, acceptSuggestion, clearSuggestions, setActiveIndex])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

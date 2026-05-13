@@ -26,6 +26,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react'
 import RevisionPanel from './components/revision/RevisionPanel'
 import GhostOverlay from './components/ghost/GhostOverlay'
+import type { GhostConsoleState } from './components/ghost/GhostOverlay'
 import IntentPanel from './components/intent/IntentPanel'
 import {
   importFile,
@@ -69,6 +70,16 @@ type HistoryItem = {
   createdAt: string
   excerpt: string
   analysis: Analysis
+}
+
+const emptyGhostConsole: GhostConsoleState = {
+  suggestions: [],
+  activeIndex: -1,
+  loading: false,
+  acceptCurrent: () => {},
+  acceptSuggestion: () => {},
+  clearSuggestions: () => {},
+  setActiveIndex: () => {},
 }
 
 const storageKeys = {
@@ -290,6 +301,7 @@ function App() {
   const [exportMenuOpen, setExportMenuOpen] = useState(false)
   const [autoStartVoice, setAutoStartVoice] = useState(false)
   const [rightTab, setRightTab] = useState<'ghost' | 'intent' | 'lens'>('ghost')
+  const [ghostConsole, setGhostConsole] = useState<GhostConsoleState>(emptyGhostConsole)
   const editorCardRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -507,6 +519,15 @@ function App() {
     }
   }
 
+  const activeGhostIndex =
+    ghostConsole.activeIndex >= 0 && ghostConsole.activeIndex < ghostConsole.suggestions.length
+      ? ghostConsole.activeIndex
+      : ghostConsole.suggestions.length > 0
+        ? 0
+        : -1
+
+  const activeGhost = activeGhostIndex >= 0 ? ghostConsole.suggestions[activeGhostIndex] : null
+
   return (
     <main className="app-shell">
       <section className="topbar">
@@ -654,7 +675,13 @@ function App() {
                 />
               )}
             </AnimatePresence>
-            {editor && <GhostOverlay editor={editor} containerRef={editorCardRef} />}
+            {editor && (
+              <GhostOverlay
+                editor={editor}
+                containerRef={editorCardRef}
+                onStateChange={setGhostConsole}
+              />
+            )}
           </div>
 
           <div className="editor-footer">
@@ -694,15 +721,87 @@ function App() {
           </div>
 
           {rightTab === 'ghost' ? (
-            <div className="ghost-tab-empty">
-              <Sparkles size={18} />
-              <p>在编辑器中输入文字，AI 会自动扫描并显示幽灵文字建议。</p>
-              <div className="ghost-tab-hint">
-                <span>Tab 切换建议</span>
-                <span>Enter 接受</span>
-                <span>Esc 关闭</span>
+            ghostConsole.suggestions.length > 0 ? (
+              <div className="ghost-console">
+                <div className="ghost-console-header">
+                  <div>
+                    <span className="ghost-console-kicker">Ghost Console</span>
+                    <h3>{ghostConsole.suggestions.length} 条即时建议</h3>
+                  </div>
+                  <span className="ghost-console-status">
+                    {ghostConsole.loading ? '扫描中' : '已就绪'}
+                  </span>
+                </div>
+
+                <div className="ghost-console-actions">
+                  <button
+                    className="ghost-console-primary"
+                    disabled={!activeGhost}
+                    onClick={() => ghostConsole.acceptCurrent()}
+                    type="button"
+                  >
+                    <Check size={14} />
+                    接受当前
+                  </button>
+                  <button
+                    className="ghost-console-secondary"
+                    onClick={() => ghostConsole.clearSuggestions()}
+                    type="button"
+                  >
+                    <X size={14} />
+                    清空建议
+                  </button>
+                </div>
+
+                <div className="ghost-console-list">
+                  {ghostConsole.suggestions.map((ghost, index) => (
+                    <button
+                      aria-label={`查看幽灵文字建议 ${index + 1}`}
+                      className={`ghost-console-card ${index === activeGhostIndex ? 'active' : ''} ${ghost.severity}`}
+                      key={ghost.id}
+                      onClick={() => ghostConsole.setActiveIndex(index)}
+                      onDoubleClick={() => ghostConsole.acceptSuggestion(ghost.id)}
+                      type="button"
+                    >
+                      <span className="ghost-console-dot" />
+                      <span className="ghost-console-card-body">
+                        <span className="ghost-console-row">
+                          <span>原文</span>
+                          <strong className="ghost-console-original">{ghost.original}</strong>
+                        </span>
+                        <span className="ghost-console-row">
+                          <span>建议</span>
+                          <strong>{ghost.replacement}</strong>
+                        </span>
+                        <small>{ghost.reason}</small>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="ghost-tab-hint">
+                  <span>Tab 切换</span>
+                  <span>Enter 接受</span>
+                  <span>双击卡片接受</span>
+                </div>
               </div>
-            </div>
+            ) : ghostConsole.loading ? (
+              <div className="ghost-console ghost-console-loading">
+                <Loader2 className="spin" size={20} />
+                <h3>正在扫描当前段落</h3>
+                <p>Revision Lens 会在你停顿后刷新幽灵文字建议。</p>
+              </div>
+            ) : (
+              <div className="ghost-tab-empty">
+                <Sparkles size={18} />
+                <p>在编辑器中输入文字，AI 会自动扫描并显示幽灵文字建议。</p>
+                <div className="ghost-tab-hint">
+                  <span>Tab 切换建议</span>
+                  <span>Enter 接受</span>
+                  <span>Esc 关闭</span>
+                </div>
+              </div>
+            )
           ) : rightTab === 'intent' ? (
             <IntentPanel fullText={editor?.getText() ?? ''} onNodeClick={handleIntentNodeClick} />
           ) : isAnalyzing ? (

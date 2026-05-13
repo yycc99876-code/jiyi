@@ -1115,6 +1115,194 @@ button {
   color: var(--muted);
 }
 
+.ghost-console {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  padding: 16px;
+  gap: 12px;
+}
+
+.ghost-console-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ghost-console-kicker {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.ghost-console-header h3,
+.ghost-console-loading h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.ghost-console-status {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ghost-console-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.ghost-console-primary,
+.ghost-console-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.ghost-console-primary {
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--line));
+  background: var(--accent);
+  color: #fff;
+}
+
+.ghost-console-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.ghost-console-secondary {
+  border: 1px solid var(--line);
+  background: var(--surface-strong);
+  color: var(--muted);
+}
+
+.ghost-console-primary:not(:disabled):hover,
+.ghost-console-secondary:hover {
+  transform: translateY(-1px);
+}
+
+.ghost-console-list {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.ghost-console-card {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.ghost-console-card:hover,
+.ghost-console-card.active {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: rgba(185, 129, 36, 0.08);
+}
+
+.ghost-console-dot {
+  width: 7px;
+  height: 7px;
+  margin-top: 7px;
+  border-radius: 999px;
+  background: var(--green);
+}
+
+.ghost-console-card.moderate .ghost-console-dot {
+  background: var(--accent);
+}
+
+.ghost-console-card.major .ghost-console-dot {
+  background: var(--red);
+}
+
+.ghost-console-card-body {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ghost-console-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.ghost-console-row span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 760;
+}
+
+.ghost-console-row strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.ghost-console-original {
+  color: var(--muted) !important;
+  font-weight: 560 !important;
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--muted) 50%, transparent);
+}
+
+.ghost-console-card small {
+  display: block;
+  padding-left: 40px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.ghost-console-loading {
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  text-align: center;
+}
+
+.ghost-console-loading p {
+  max-width: 250px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
 /* ─── Ghost Overlay ─── */
 
 .ghost-loading-hint {

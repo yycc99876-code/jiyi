@@ -123,9 +123,6 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
       console.log('[Ghost] Text not found in doc:', search)
       return
     }
-    console.log('[Ghost] Replacing at', foundFrom, '-', foundTo, ':', search, '→', ghost.replacement)
-
-    // Use ProseMirror transaction directly — most reliable method
     const tr = state.tr.insertText(ghost.replacement, foundFrom, foundTo)
     view.dispatch(tr)
 
@@ -159,7 +156,6 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
 
   scanRef.current = scanCurrentParagraph
 
-  // Window-level capture keyboard handler — runs before everything
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const g = ghostsRef.current
@@ -183,12 +179,10 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
 
       if (e.key === 'Enter') {
         const idx = activeIdxRef.current
-        console.log('[Ghost] Enter pressed, activeIdx:', idx, 'ghosts:', g.length)
         if (idx >= 0 && idx < g.length) {
           e.preventDefault()
           e.stopPropagation()
           e.stopImmediatePropagation()
-          console.log('[Ghost] Accepting:', g[idx].original, '→', g[idx].replacement)
           doAccept(g[idx])
           return
         }
@@ -239,36 +233,27 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
 
   if (ghosts.length === 0 && !loading) return null
 
+  const activeGhost = activeIdx >= 0 ? ghosts[activeIdx] : null
+
   return (
     <>
       {ghosts.map((ghost, i) => (
         <div
           key={ghost.id}
+          className={`ghost-range ${i === activeIdx ? 'active' : ''} ${ghost.severity}`}
           style={{
-            position: 'absolute',
             top: ghost.rect.top,
             left: ghost.rect.left,
             minWidth: ghost.rect.width,
             height: ghost.rect.height,
-            pointerEvents: 'none',
-            zIndex: 5,
-            display: 'flex',
-            alignItems: 'flex-end',
           }}
         >
-          <div style={{ position: 'absolute', bottom: 0, left: 0, width: ghost.rect.width, height: 2, background: i === activeIdx ? 'var(--accent)' : 'var(--green)', borderRadius: 1, opacity: 0.7 }} />
-          <div style={{
-            position: 'absolute', bottom: ghost.rect.height + 4, left: 0, whiteSpace: 'nowrap',
-            fontSize: '0.92em', lineHeight: 1.3,
-            color: i === activeIdx ? 'var(--accent-ink)' : 'var(--green)',
-            opacity: i === activeIdx ? 1 : 0.8,
-            fontWeight: i === activeIdx ? 600 : 400,
-            padding: '1px 4px', borderRadius: 3,
-            background: i === activeIdx ? 'rgba(185, 129, 36, 0.12)' : 'transparent',
-            pointerEvents: 'none',
-          }}>
-            {ghost.replacement}
-          </div>
+          {activeGhost?.id === ghost.id && (
+            <div className="ghost-inline-preview">
+              <span>建议</span>
+              <strong>{ghost.replacement}</strong>
+            </div>
+          )}
         </div>
       ))}
 
@@ -284,11 +269,15 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
         const container = containerRef.current
         if (!paragraph || !container) return null
         const pRect = paragraph.getBoundingClientRect()
+        const panelWidth = Math.min(460, window.innerWidth - 32)
+        const left = Math.min(Math.max(pRect.left, 16), Math.max(16, window.innerWidth - panelWidth - 16))
+        const preferredTop = pRect.bottom + 10
+        const top = Math.min(Math.max(preferredTop, 16), Math.max(16, window.innerHeight - 260))
 
         return (
           <div
             className="ghost-suggestion-panel"
-            style={{ position: 'fixed', top: pRect.bottom + 8, left: pRect.left, zIndex: 999, pointerEvents: 'auto' }}
+            style={{ top, left, width: panelWidth }}
           >
             {ghosts.map((ghost, i) => (
               <button
@@ -300,8 +289,17 @@ export default function GhostOverlay({ editor, containerRef }: Props) {
                 onMouseEnter={() => setActiveIdx(i)}
               >
                 <span className="ghost-severity-dot" />
-                <span className="ghost-suggestion-text">{ghost.replacement}</span>
-                <span className="ghost-suggestion-reason">{ghost.reason}</span>
+                <span className="ghost-suggestion-body">
+                  <span className="ghost-suggestion-row">
+                    <span className="ghost-suggestion-label">原文</span>
+                    <span className="ghost-suggestion-original">{ghost.original}</span>
+                  </span>
+                  <span className="ghost-suggestion-row">
+                    <span className="ghost-suggestion-label">建议</span>
+                    <span className="ghost-suggestion-text">{ghost.replacement}</span>
+                  </span>
+                  <span className="ghost-suggestion-reason">{ghost.reason}</span>
+                </span>
               </button>
             ))}
             <div className="ghost-hint">Tab 切换 · Enter 接受 · Esc 关闭</div>

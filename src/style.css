@@ -1134,16 +1134,92 @@ button {
   z-index: 10;
 }
 
+.ghost-range {
+  position: absolute;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.ghost-range::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 1px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--green);
+  opacity: 0.58;
+}
+
+.ghost-range.moderate::after {
+  background: var(--accent);
+}
+
+.ghost-range.major::after {
+  background: var(--red);
+}
+
+.ghost-range.active::before {
+  content: "";
+  position: absolute;
+  inset: -2px -3px;
+  border-radius: 5px;
+  background: rgba(185, 129, 36, 0.08);
+}
+
+.ghost-range.active::after {
+  height: 3px;
+  opacity: 0.95;
+}
+
+.ghost-inline-preview {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 5px);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(360px, calc(100vw - 48px));
+  padding: 4px 8px;
+  border: 1px solid rgba(185, 129, 36, 0.28);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-strong) 94%, var(--accent) 6%);
+  color: var(--text);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.ghost-inline-preview span {
+  flex: 0 0 auto;
+  color: var(--accent-ink);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.ghost-inline-preview strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
 .ghost-suggestion-panel {
-  min-width: 280px;
-  max-width: 420px;
+  position: fixed;
+  max-width: calc(100vw - 32px);
+  max-height: min(430px, calc(100vh - 32px));
+  overflow: auto;
   padding: 8px;
   border: 1px solid var(--line-strong);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--surface-strong);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(255, 255, 255, 0.04);
   backdrop-filter: blur(20px);
   animation: ghost-panel-in 0.18s ease-out;
+  z-index: 999;
+  pointer-events: auto;
 }
 
 @keyframes ghost-panel-in {
@@ -1166,7 +1242,7 @@ button {
   align-items: flex-start;
   gap: 10px;
   width: 100%;
-  padding: 10px 12px;
+  padding: 11px 12px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
@@ -1191,7 +1267,7 @@ button {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  margin-top: 6px;
+  margin-top: 8px;
   flex-shrink: 0;
   background: var(--muted);
 }
@@ -1208,19 +1284,51 @@ button {
   background: var(--red);
 }
 
+.ghost-suggestion-body {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  flex: 1;
+}
+
+.ghost-suggestion-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.ghost-suggestion-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.ghost-suggestion-original {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, var(--muted) 55%, transparent);
+  overflow-wrap: anywhere;
+}
+
 .ghost-suggestion-text {
   font-size: 13px;
   font-weight: 560;
-  line-height: 1.5;
-  flex: 1;
+  line-height: 1.55;
+  color: var(--text);
+  overflow-wrap: anywhere;
 }
 
 .ghost-suggestion-reason {
   display: block;
   font-size: 11px;
   color: var(--muted);
-  line-height: 1.5;
-  margin-top: 2px;
+  line-height: 1.55;
+  padding-left: 42px;
+  overflow-wrap: anywhere;
 }
 
 .ghost-hint {

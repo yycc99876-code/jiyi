@@ -1,0 +1,5 @@
+.claude
+.codex-claude
+node_modules
+dist
+*.log

@@ -138,7 +138,7 @@ const cache = new Map<string, { data: CoherenceAgentResponse; ts: number }>()
 const CACHE_TTL = 10_000
 
 function cacheKey(paragraphs: { id: string; text: string }[]): string {
-  return paragraphs.map((p) => `${p.id}:${p.text.slice(0, 40)}`).join('|')
+  return paragraphs.map((p) => `${p.id}:${p.text.length}:${p.text.slice(0, 30)}...${p.text.slice(-20)}`).join('|')
 }
 
 export default async function handler(req: any, res: any) {
@@ -147,7 +147,7 @@ export default async function handler(req: any, res: any) {
     return
   }
 
-  const apiKey = process.env.DEEPSEEK_API_KEY
+  const apiKey = process.env.DASHSCOPE_API_KEY
   if (!apiKey) {
     res.status(200).json({ graph: null, ghostSuggestions: [], structuralNudges: [] })
     return
@@ -171,14 +171,14 @@ export default async function handler(req: any, res: any) {
 
   let result: any
   try {
-    const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+    const response = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
+        model: 'qwen-turbo',
         temperature: 0.3,
         response_format: { type: 'json_object' },
         messages: [
@@ -194,6 +194,7 @@ export default async function handler(req: any, res: any) {
           },
         ],
       }),
+      signal: AbortSignal.timeout(55_000),
     })
 
     if (!response.ok) {

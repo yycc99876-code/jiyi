@@ -70,3 +70,60 @@ export interface CoherenceAgentResponse {
   ghostSuggestions: CoherenceGhostSuggestion[]
   structuralNudges: StructuralNudge[]
 }
+
+// ---------------------------------------------------------------------------
+// Canvas Action Types
+// ---------------------------------------------------------------------------
+
+export type CanvasActionType = 'strengthen' | 'counterargument' | 'evidence' | 'rewrite'
+
+export interface CanvasActionRequest {
+  paragraph: string
+  action: CanvasActionType
+  context?: string
+}
+
+export interface CanvasActionVariant {
+  id: string
+  text: string
+  explanation: string
+}
+
+export interface CanvasActionResponse {
+  original: string
+  action: CanvasActionType
+  variants: CanvasActionVariant[]
+}
+
+// ---------------------------------------------------------------------------
+// Draft Canvas Chat Types
+// ---------------------------------------------------------------------------
+
+export type CanvasSuggestionType = 'note' | 'outline' | 'draft' | 'question'
+
+export interface CanvasSuggestion {
+  id: string
+  type: CanvasSuggestionType
+  title: string
+  content: string
+  actionLabel?: string
+}
+
+export interface CanvasChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  createdAt: number
+  suggestions?: CanvasSuggestion[]
+}
+
+export interface CanvasChatRequest {
+  message: string
+  history?: Pick<CanvasChatMessage, 'role' | 'content'>[]
+  articleContext?: string
+}
+
+export interface CanvasChatResponse {
+  reply: string
+  suggestions: CanvasSuggestion[]
+}

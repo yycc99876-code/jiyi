@@ -34,6 +34,8 @@ function relationLabel(relation: string) {
       return '递进'
     case 'weakens':
       return '弱化'
+    case 'unrelated':
+      return '无关'
     default:
       return relation
   }

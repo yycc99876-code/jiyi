@@ -52,7 +52,71 @@ function extractParagraphs(editor: Editor): GraphParagraph[] {
     return false
   })
 
+  if (paragraphs.length < 2) {
+    const fullText = editor.getText({ blockSeparator: '\n' }).trim()
+    const fallbackChunks = splitTextForScan(fullText)
+    if (fallbackChunks.length >= 2) {
+      return fallbackChunks.map((text, index) => ({
+        id: `auto_${index}`,
+        text,
+        heading: index === 0 && text.length <= 80 ? text : undefined,
+      }))
+    }
+  }
+
   return paragraphs
+}
+
+function splitTextForScan(text: string): string[] {
+  if (text.length < 80) return []
+
+  const lineChunks = text
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length >= 12)
+
+  if (lineChunks.length >= 2) return lineChunks
+
+  const sentences = text
+    .match(/[^。！？!?；;.!?]+[。！？!?；;.!?]?/g)
+    ?.map((sentence) => sentence.trim())
+    .filter(Boolean) ?? []
+
+  if (sentences.length < 2) return chunkByLength(text)
+
+  const chunks: string[] = []
+  let current = ''
+
+  for (const sentence of sentences) {
+    const next = current ? `${current}${sentence}` : sentence
+    if (next.length < 70) {
+      current = next
+      continue
+    }
+    chunks.push(next)
+    current = ''
+  }
+
+  if (current) {
+    if (chunks.length > 0 && current.length < 40) {
+      chunks[chunks.length - 1] = `${chunks[chunks.length - 1]}${current}`
+    } else {
+      chunks.push(current)
+    }
+  }
+
+  const filtered = chunks.filter((chunk) => chunk.length >= 20)
+  return filtered.length >= 2 ? filtered : chunkByLength(text)
+}
+
+function chunkByLength(text: string): string[] {
+  if (text.length < 120) return []
+  const chunks: string[] = []
+  for (let index = 0; index < text.length; index += 90) {
+    const chunk = text.slice(index, index + 90).trim()
+    if (chunk.length >= 30) chunks.push(chunk)
+  }
+  return chunks.length >= 2 ? chunks : []
 }
 
 /** Fast 32-bit hash for per-paragraph change detection */
@@ -84,7 +148,7 @@ function computeDocSignature(paragraphs: GraphParagraph[]): string {
   return `${h}_${paragraphs.length}`
 }
 
-const SCAN_TIMEOUT_MS = 75_000 // 75 seconds — generous headroom for longer coherence scans
+const SCAN_TIMEOUT_MS = 90_000 // 90 seconds — generous headroom for longer coherence scans
 
 // ---------------------------------------------------------------------------
 // Hook
@@ -93,6 +157,7 @@ const SCAN_TIMEOUT_MS = 75_000 // 75 seconds — generous headroom for longer co
 interface UseCoherenceAgentOptions {
   initialGraph?: ArgumentGraph | null
   initialNudges?: StructuralNudge[]
+  resetKey?: string | null
   onGraphUpdate?: (graph: ArgumentGraph, nudges: StructuralNudge[]) => void
 }
 
@@ -100,7 +165,7 @@ export default function useCoherenceAgent(
   editor: Editor | null,
   options: UseCoherenceAgentOptions = {},
 ) {
-  const { initialGraph, initialNudges, onGraphUpdate } = options
+  const { initialGraph, initialNudges, resetKey, onGraphUpdate } = options
 
   const [state, setState] = useState<CoherenceState>({
     graph: initialGraph ?? null,
@@ -133,7 +198,7 @@ export default function useCoherenceAgent(
   useEffect(() => { graphRef.current = state.graph }, [state.graph])
   useEffect(() => { onGraphUpdateRef.current = onGraphUpdate }, [onGraphUpdate])
 
-  // Reset state when initialGraph changes (document switch)
+  // Reset state when the active document changes.
   useEffect(() => {
     graphRef.current = initialGraph ?? null
     paragraphHashRef.current = new Map()
@@ -153,7 +218,7 @@ export default function useCoherenceAgent(
       scanError: null,
       lastScannedAt: null,
     })
-  }, [initialGraph, initialNudges])
+  }, [resetKey])
 
   // ── Cleanup on unmount ──────────────────────────────────────────────────
   useEffect(() => {
@@ -188,7 +253,17 @@ export default function useCoherenceAgent(
     if (scanRunningRef.current) return
 
     const paragraphs = extractParagraphs(ed)
-    if (paragraphs.length < 2) return
+    if (paragraphs.length < 2) {
+      if (force) {
+        setState((s) => ({
+          ...s,
+          isScanning: false,
+          scanStage: 'error',
+          scanError: '当前正文太短，至少需要两段内容才能生成结构图。',
+        }))
+      }
+      return
+    }
 
     // Full-document signature — skip if unchanged (unless forced)
     const docSig = computeDocSignature(paragraphs)
@@ -350,22 +425,20 @@ export default function useCoherenceAgent(
 
   // ── Initial scan when editor is ready ───────────────────────────────────
   useEffect(() => {
-    if (editor) {
-      setTimeout(() => scanDocument(false), 1000)
-    }
+    if (!editor) return
+    const timer = setTimeout(() => scanDocument(false), 1000)
+    return () => clearTimeout(timer)
   }, [editor, scanDocument])
 
   // ── dismissNudge ────────────────────────────────────────────────────────
-  const dismissNudge = useCallback((index: number) => {
+  const dismissNudge = useCallback((nudgeKey: string) => {
     setState((s) => {
-      const nudge = s.nudges[index]
-      if (nudge) {
-        const key = `${nudge.type}_${nudge.relatedParagraphs.join(',')}`
-        dismissedNudgesRef.current.add(key)
-      }
+      dismissedNudgesRef.current.add(nudgeKey)
       return {
         ...s,
-        nudges: s.nudges.filter((_, i) => i !== index),
+        nudges: s.nudges.filter(
+          (n) => `${n.type}_${n.relatedParagraphs.join(',')}` !== nudgeKey,
+        ),
       }
     })
   }, [])

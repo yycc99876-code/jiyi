@@ -96,7 +96,7 @@ export default async function handler(req: any, res: any) {
     return
   }
 
-  const apiKey = process.env.DEEPSEEK_API_KEY
+  const apiKey = process.env.DASHSCOPE_API_KEY
 
   const { paragraphText, fullContext } = req.body ?? {}
   if (!paragraphText || typeof paragraphText !== 'string') {
@@ -109,14 +109,14 @@ export default async function handler(req: any, res: any) {
   let modelRaw: any[] = []
   if (apiKey) {
     try {
-      const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      const response = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
+          model: 'qwen-turbo',
           temperature: 0.3,
           response_format: { type: 'json_object' },
           messages: [

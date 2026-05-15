@@ -1,0 +1,50 @@
+{
+  "name": "revision-chick",
+  "version": 1,
+  "frameWidth": 96,
+  "frameHeight": 96,
+  "states": {
+    "idle": {
+      "src": "/pets/revision-chick/idle.svg",
+      "label": "等待指令",
+      "step": 0,
+      "totalSteps": 3
+    },
+    "reading": {
+      "src": "/pets/revision-chick/reading.svg",
+      "label": "正在阅读你的文本",
+      "step": 1,
+      "totalSteps": 3
+    },
+    "mapping": {
+      "src": "/pets/revision-chick/mapping.svg",
+      "label": "正在绘制文章结构",
+      "step": 2,
+      "totalSteps": 3
+    },
+    "thinking": {
+      "src": "/pets/revision-chick/thinking.svg",
+      "label": "正在寻找逻辑断点",
+      "step": 2,
+      "totalSteps": 3
+    },
+    "polishing": {
+      "src": "/pets/revision-chick/polishing.svg",
+      "label": "正在整理可执行建议",
+      "step": 3,
+      "totalSteps": 3
+    },
+    "success": {
+      "src": "/pets/revision-chick/success.svg",
+      "label": "分析完成",
+      "step": 3,
+      "totalSteps": 3
+    },
+    "error": {
+      "src": "/pets/revision-chick/error.svg",
+      "label": "扫描没有完成",
+      "step": 0,
+      "totalSteps": 3
+    }
+  }
+}

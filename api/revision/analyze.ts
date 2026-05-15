@@ -56,7 +56,7 @@ export default async function handler(req: any, res: any) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: process.env.DASHSCOPE_MODEL || 'qwen3.6-plus',
+      model: process.env.DASHSCOPE_MODEL || 'qwen-turbo',
       temperature: 0.35,
       response_format: { type: 'json_object' },
       messages: [

@@ -1,7 +1,21 @@
 import mammoth from 'mammoth'
 import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx'
+import * as pdfjsLib from 'pdfjs-dist'
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  'pdfjs-dist/build/pdf.worker.min.mjs',
+  import.meta.url,
+).toString()
 
 // ─── Import ───
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
 
 function extOf(fileName: string): string {
   return fileName.split('.').pop()?.toLowerCase() ?? ''
@@ -13,7 +27,7 @@ function textToHtml(text: string): string {
     .map((block) => {
       const trimmed = block.trim()
       if (!trimmed) return ''
-      return `<p>${trimmed.replace(/\n/g, '<br>')}</p>`
+      return `<p>${escapeHtml(trimmed).replace(/\n/g, '<br>')}</p>`
     })
     .filter(Boolean)
     .join('')
@@ -63,6 +77,110 @@ export async function importFile(file: File): Promise<ImportResult> {
   }
 
   throw new Error(`不支持的文件格式: .${ext}。支持 .docx、.txt、.md、.markdown`)
+}
+
+// ─── Source Import ───
+
+export interface SourceImportResult {
+  title: string
+  content: string
+  htmlContent: string
+  format: 'txt' | 'md' | 'docx' | 'pdf'
+  originalFileName: string
+  rawDataBase64: string
+  mimeType: string
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i])
+  }
+  return btoa(binary)
+}
+
+export async function importSourceFile(file: File): Promise<SourceImportResult> {
+  const ext = extOf(file.name)
+  const title = file.name.replace(/\.\w+$/, '')
+
+  if (ext === 'doc') {
+    throw new Error('.doc 格式不支持，请转换为 .docx 后重试。')
+  }
+
+  if (ext === 'txt' || ext === 'md' || ext === 'markdown') {
+    const text = await readAsText(file)
+    return {
+      title,
+      content: text,
+      htmlContent: textToHtml(text),
+      format: ext === 'txt' ? 'txt' : 'md',
+      originalFileName: file.name,
+      rawDataBase64: '',
+      mimeType: '',
+    }
+  }
+
+  if (ext === 'docx') {
+    const arrayBuffer = await readAsArrayBuffer(file)
+    const [htmlResult, textResult] = await Promise.all([
+      mammoth.convertToHtml({ arrayBuffer }),
+      mammoth.extractRawText({ arrayBuffer }),
+    ])
+    return {
+      title,
+      content: textResult.value,
+      htmlContent: htmlResult.value,
+      format: 'docx',
+      originalFileName: file.name,
+      rawDataBase64: arrayBufferToBase64(arrayBuffer),
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    }
+  }
+
+  if (ext === 'pdf') {
+    const arrayBuffer = await readAsArrayBuffer(file)
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+    const textParts: string[] = []
+    const htmlParts: string[] = []
+
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i)
+      const tc = await page.getTextContent()
+      const items = tc.items.filter((item): item is typeof item & { str: string } => 'str' in item)
+      let pageText = ''
+      for (let j = 0; j < items.length; j++) {
+        const item = items[j]
+        if (j > 0) {
+          const prev = items[j - 1]
+          // Add space if previous item didn't end with space and current doesn't start with one
+          if (prev.str && item.str && !/\s$/.test(prev.str) && !/^\s/.test(item.str)) {
+            pageText += ' '
+          }
+        }
+        pageText += item.str
+        if ('hasEOL' in item && item.hasEOL && j < items.length - 1) {
+          pageText += '\n'
+        }
+      }
+      textParts.push(pageText)
+      if (pageText.trim()) {
+        htmlParts.push(`<p>${escapeHtml(pageText).replace(/\n/g, '<br>')}</p>`)
+      }
+    }
+
+    return {
+      title,
+      content: textParts.join('\n\n'),
+      htmlContent: htmlParts.join(''),
+      format: 'pdf',
+      originalFileName: file.name,
+      rawDataBase64: arrayBufferToBase64(arrayBuffer),
+      mimeType: 'application/pdf',
+    }
+  }
+
+  throw new Error(`不支持的文件格式: .${ext}。支持 .docx、.txt、.md、.pdf`)
 }
 
 // ─── Export Helpers ───

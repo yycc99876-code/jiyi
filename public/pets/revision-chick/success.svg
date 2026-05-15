@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" fill="none">
+  <rect x="17" y="72" width="62" height="7" rx="3.5" fill="#E9DFD0"/>
+  <path d="M21 25l4-6 4 6M69 23l5-7 4 7M75 43l5-5 3 7" stroke="#B98124" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <animate attributeName="opacity" values=".35;1;.35" dur="1s" repeatCount="indefinite"/>
+  </path>
+  <g>
+    <animateTransform attributeName="transform" type="translate" values="0 0;0 -8;0 0" dur=".9s" repeatCount="indefinite"/>
+    <path d="M31 58c0-13 8-22 18-22s18 9 18 22c0 12-8 18-18 18S31 70 31 58Z" fill="#F2C766" stroke="#2B2520" stroke-width="2.4"/>
+    <path d="M39 50c3-2 5-2 7 0M52 50c3-2 5-2 7 0" stroke="#2B2520" stroke-width="2" stroke-linecap="round"/>
+    <path d="M46 57h6l-3 4-3-4Z" fill="#C77A2A" stroke="#2B2520" stroke-width="1.2" stroke-linejoin="round"/>
+    <path d="M27 58c-6 0-9 5-7 9 5 2 10 0 13-5" fill="#E7B84C" stroke="#2B2520" stroke-width="2"/>
+    <path d="M71 58c6 0 9 5 7 9-5 2-10 0-13-5" fill="#E7B84C" stroke="#2B2520" stroke-width="2"/>
+  </g>
+  <rect x="32" y="19" width="35" height="24" rx="6" fill="#F3FFF4" stroke="#2B2520" stroke-width="2"/>
+  <path d="M41 31l6 5 12-13" stroke="#286A42" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

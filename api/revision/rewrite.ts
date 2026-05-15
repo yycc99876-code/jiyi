@@ -61,7 +61,7 @@ function cleanRewrittenText(raw: unknown, original: string) {
   return text || original
 }
 
-async function callDashScopeJson(messages: { role: string; content: string }[], temperature = 0.35) {
+async function callDashScopeJson(messages: { role: string; content: string }[], temperature = 0.4) {
   const response = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -69,7 +69,7 @@ async function callDashScopeJson(messages: { role: string; content: string }[], 
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: process.env.DASHSCOPE_MODEL || 'qwen3.6-plus',
+      model: 'qwen-turbo',
       temperature,
       response_format: { type: 'json_object' },
       messages,
@@ -107,40 +107,22 @@ export default async function handler(req: any, res: any) {
   const instruction =
     typeof userInstruction === 'string' && userInstruction.trim() ? userInstruction.trim() : '让表达更自然'
 
+  let rewriteObject: any
   let intent
   try {
-    const parsedIntent = await callDashScopeJson([
+    const result = await callDashScopeJson([
       {
         role: 'system',
         content:
-          '你是一个写作意图解析器。根据用户的中文自然语言修改指令，提取结构化的改写意图。只返回严格 JSON，不要解释。',
+          '你是中文写作编辑。按用户指令改写文本，一步完成。同时分析改写意图。只返回 JSON，不要输出分析、解释、Markdown 或多余字段。',
       },
       {
         role: 'user',
-        content: `用户选中的文本：\n${selectedText}\n\n用户的修改指令：\n${instruction}\n\n返回格式：{"goal":"rewrite","tone":"natural/formal/casual/persuasive","style":"professional/conversational/academic/creative","audience":"目标读者","length":"shorter/same/longer","preserve_meaning":true,"rewrite_strength":0.6}`,
+        content: `原文：\n${selectedText}\n\n修改指令：\n${instruction}\n\n返回格式：\n{"rewritten":"改写后的文本","intent":{"tone":"natural/formal/casual/persuasive","style":"professional/conversational/academic/creative","audience":"目标读者","length":"shorter/same/longer","preserve_meaning":true,"rewrite_strength":0.6}}`,
       },
     ])
-    intent = normalizeIntent(parsedIntent)
-  } catch {
-    intent = normalizeIntent({})
-  }
-
-  let rewriteObject: any
-  try {
-    rewriteObject = await callDashScopeJson(
-      [
-        {
-          role: 'system',
-          content:
-            '你是一个中文写作编辑。你的任务是按用户指令改写 selectedText。只返回 JSON，且 JSON 只能包含 rewritten 字段。rewritten 必须是最终改写文本。不要输出分析、约束、解释、英文提示词、Markdown、引号或多余字段。',
-        },
-        {
-          role: 'user',
-          content: `selectedText:\n${selectedText}\n\nuserInstruction:\n${instruction}\n\nstructuredIntent:\n${JSON.stringify(intent)}\n\n返回格式：{"rewritten":"最终改写文本"}`,
-        },
-      ],
-      0.45,
-    )
+    rewriteObject = result
+    intent = normalizeIntent(result?.intent)
   } catch {
     res.status(502).json({ error: '模型调用失败，请稍后重试' })
     return

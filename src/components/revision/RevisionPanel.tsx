@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Sparkles, ArrowRight, X } from 'lucide-react'
+import { Sparkles, ArrowRight, X, AlertTriangle } from 'lucide-react'
 import SuggestionChips from './SuggestionChips'
 import VoiceInputButton from './VoiceInputButton'
 import IntentPreview from './IntentPreview'
@@ -14,14 +14,24 @@ interface Props {
   onClose: () => void
   onAccept: (replacement: string) => void
   autoStartVoice?: boolean
+  initialInstruction?: string
 }
 
-export default function RevisionPanel({ selectedText, onClose, onAccept, autoStartVoice }: Props) {
-  const [instruction, setInstruction] = useState('')
+export default function RevisionPanel({ selectedText, onClose, onAccept, autoStartVoice, initialInstruction = '' }: Props) {
+  const [instruction, setInstruction] = useState(initialInstruction)
   const [panelState, setPanelState] = useState<PanelState>('input')
   const [rewriteResult, setRewriteResult] = useState<RewriteResult | null>(null)
   const [diffStatus, setDiffStatus] = useState<'pending' | 'accepted' | 'rejected'>('pending')
+  const [error, setError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Reset state when a new instruction is triggered while panel is open
+  useEffect(() => {
+    setInstruction(initialInstruction)
+    setError(null)
+    setPanelState('input')
+    setRewriteResult(null)
+  }, [initialInstruction])
 
   // Auto-resize textarea
   useEffect(() => {
@@ -51,7 +61,7 @@ export default function RevisionPanel({ selectedText, onClose, onAccept, autoSta
       setPanelState('result')
     } catch (err: any) {
       setPanelState('input')
-      alert(err?.message || '生成修改失败，请重试')
+      setError(err?.message || '生成修改失败，请重试')
     }
   }, [selectedText, instruction])
 
@@ -153,7 +163,7 @@ export default function RevisionPanel({ selectedText, onClose, onAccept, autoSta
                 className="revision-textarea"
                 placeholder="例如：让表达更自然，但保留原本观点"
                 value={instruction}
-                onChange={(e) => setInstruction(e.target.value)}
+                onChange={(e) => { setInstruction(e.target.value); if (error) setError(null) }}
                 onKeyDown={handleKeyDown}
                 rows={2}
               />
@@ -162,6 +172,20 @@ export default function RevisionPanel({ selectedText, onClose, onAccept, autoSta
                 <span className="revision-hint">Alt+M 语音 | ⌘ Enter 生成</span>
               </div>
             </div>
+
+            {error && (
+              <motion.div
+                className="revision-error"
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+              >
+                <AlertTriangle size={12} />
+                <span>{error}</span>
+                <button type="button" className="icon-button" onClick={() => setError(null)}>
+                  <X size={10} />
+                </button>
+              </motion.div>
+            )}
 
             <button
               type="button"

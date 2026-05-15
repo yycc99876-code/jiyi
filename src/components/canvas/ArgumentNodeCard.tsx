@@ -1,5 +1,7 @@
+import { useState, useEffect } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
-import { ArrowUpRight } from 'lucide-react'
+import { ArrowUpRight, ExternalLink, Loader2, Sparkles, ShieldPlus, Swords, BookOpen, PenLine, Check } from 'lucide-react'
+import type { CanvasActionType } from '../../services/ai/coherenceTypes'
 
 export interface ArgumentNodeData {
   label: string
@@ -8,7 +10,14 @@ export interface ArgumentNodeData {
   role: 'claim' | 'evidence' | 'counterargument' | 'transition' | 'conclusion'
   evidenceNote?: string
   isGhost?: boolean
+  isStale?: boolean
   ghostMessage?: string
+  isSelected?: boolean
+  isLoading?: boolean
+  acceptedVariantCount?: number
+  actionError?: string
+  onAction?: (action: CanvasActionType) => void
+  onScrollToEditor?: () => void
 }
 
 function roleLabel(role: string) {
@@ -44,7 +53,17 @@ function strengthBorder(strength: string) {
 
 export default function ArgumentNodeCard({ data, selected }: NodeProps) {
   const nodeData = data as unknown as ArgumentNodeData
-  const { label, paragraph, strength, role, evidenceNote, isGhost, ghostMessage } = nodeData
+  const {
+    label, paragraph, strength, role, evidenceNote,
+    isGhost, isStale, ghostMessage, isSelected, isLoading, acceptedVariantCount = 0,
+    actionError, onAction, onScrollToEditor,
+  } = nodeData
+
+  const [menuOpen, setMenuOpen] = useState(false)
+
+  useEffect(() => {
+    if (!isSelected) setMenuOpen(false)
+  }, [isSelected])
 
   if (isGhost) {
     return (
@@ -61,7 +80,7 @@ export default function ArgumentNodeCard({ data, selected }: NodeProps) {
 
   return (
     <div
-      className={`argument-node ${selected ? 'selected' : ''} strength-${strength}`}
+      className={`argument-node ${selected ? 'selected' : ''} ${isStale ? 'stale' : ''} strength-${strength}`}
       style={{ border: strengthBorder(strength) }}
     >
       <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
@@ -74,6 +93,13 @@ export default function ArgumentNodeCard({ data, selected }: NodeProps) {
           {roleLabel(role)}
         </span>
         <span className={`argument-node-strength strength-dot-${strength}`} />
+        {acceptedVariantCount > 0 && (
+          <span className="argument-node-accepted-badge" title={`${acceptedVariantCount} 个 AI 建议已接受`}>
+            <Check size={10} />
+            {acceptedVariantCount}
+          </span>
+        )}
+        {isStale && <span className="argument-node-stale-badge">旧结构</span>}
       </div>
 
       <strong className="argument-node-label">{label}</strong>
@@ -90,6 +116,86 @@ export default function ArgumentNodeCard({ data, selected }: NodeProps) {
         <div className="argument-node-weak-hint">
           <ArrowUpRight size={11} />
           <span>此论点较弱</span>
+        </div>
+      )}
+
+      {isSelected && !isLoading && (
+        <div className="argument-quick-actions">
+          <button type="button" onClick={(e) => { e.stopPropagation(); onAction?.('strengthen') }}>
+            <ShieldPlus size={11} />
+            加强
+          </button>
+          <button type="button" onClick={(e) => { e.stopPropagation(); onAction?.('evidence') }}>
+            <BookOpen size={11} />
+            补证据
+          </button>
+          <button type="button" onClick={(e) => { e.stopPropagation(); onAction?.('rewrite') }}>
+            <PenLine size={11} />
+            改写
+          </button>
+        </div>
+      )}
+
+      {actionError && (
+        <div className="argument-node-error">
+          <span>{actionError}</span>
+          <button type="button" onClick={(e) => { e.stopPropagation(); onAction?.('rewrite') }}>
+            重试
+          </button>
+        </div>
+      )}
+
+      {isSelected && (
+        <div className="argument-action-bar">
+          {isLoading ? (
+            <div className="action-bar-loading">
+              <Loader2 className="spin" size={14} />
+              <span>AI 生成中...</span>
+            </div>
+          ) : (
+            <>
+              <button
+                className="argument-action-trigger"
+                onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen) }}
+                type="button"
+              >
+                <Sparkles size={12} />
+                AI 操作
+              </button>
+              <button
+                className="argument-action-scroll-btn"
+                onClick={(e) => { e.stopPropagation(); onScrollToEditor?.() }}
+                title="跳转到编辑器"
+                type="button"
+              >
+                <ExternalLink size={12} />
+              </button>
+              {menuOpen && (
+                <div className="argument-action-menu" onClick={(e) => e.stopPropagation()}>
+                  <button className="action-menu-item strengthen" onClick={() => { onAction?.('strengthen'); setMenuOpen(false) }}>
+                    <ShieldPlus size={13} />
+                    <span>加强论点</span>
+                    <span className="action-menu-hint">强化当前论证</span>
+                  </button>
+                  <button className="action-menu-item counterargument" onClick={() => { onAction?.('counterargument'); setMenuOpen(false) }}>
+                    <Swords size={13} />
+                    <span>找反论</span>
+                    <span className="action-menu-hint">寻找对立观点</span>
+                  </button>
+                  <button className="action-menu-item evidence" onClick={() => { onAction?.('evidence'); setMenuOpen(false) }}>
+                    <BookOpen size={13} />
+                    <span>补充论据</span>
+                    <span className="action-menu-hint">增加支撑材料</span>
+                  </button>
+                  <button className="action-menu-item rewrite" onClick={() => { onAction?.('rewrite'); setMenuOpen(false) }}>
+                    <PenLine size={13} />
+                    <span>改写</span>
+                    <span className="action-menu-hint">重新组织语言</span>
+                  </button>
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
 

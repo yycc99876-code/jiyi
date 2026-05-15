@@ -3,7 +3,7 @@ import http from 'node:http'
 
 const PORT = 3001
 const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY
-const DASHSCOPE_MODEL = process.env.DASHSCOPE_MODEL || 'qwen3.6-plus'
+const DASHSCOPE_MODEL = process.env.DASHSCOPE_MODEL || 'qwen-turbo'
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY
 const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat'
 
@@ -159,19 +159,23 @@ async function callDashScope(messages: { role: string; content: string }[], json
   return json ? parseJson(content) : content
 }
 
-async function callDeepSeek(messages: { role: string; content: string }[], temperature = 0.3) {
+async function callDeepSeek(messages: { role: string; content: string }[], temperature = 0.3, maxTokens?: number) {
+  const payload: Record<string, unknown> = {
+    model: DEEPSEEK_MODEL,
+    temperature,
+    response_format: { type: 'json_object' },
+    messages,
+  }
+  if (maxTokens) payload.max_tokens = maxTokens
+
   const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      model: DEEPSEEK_MODEL,
-      temperature,
-      response_format: { type: 'json_object' },
-      messages,
-    }),
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(60_000),
   })
 
   if (!response.ok) {
@@ -179,8 +183,12 @@ async function callDeepSeek(messages: { role: string; content: string }[], tempe
   }
 
   const data = await response.json()
-  const content = data?.choices?.[0]?.message?.content
-  if (!content) throw new Error('Empty model response')
+  const message = data?.choices?.[0]?.message
+  const content = message?.content || message?.reasoning_content
+  if (!content) {
+    console.error('[DeepSeek] Empty response, full data:', JSON.stringify(data).slice(0, 300))
+    throw new Error('Empty model response')
+  }
   return parseJson(content)
 }
 
@@ -268,7 +276,7 @@ async function handleRewrite(req: http.IncomingMessage, res: http.ServerResponse
 
 async function handleCleanTranscript(req: http.IncomingMessage, res: http.ServerResponse) {
   const body = JSON.parse(await readBody(req))
-  const { text } = body
+  const { text, terms } = body
 
   if (!text || typeof text !== 'string') {
     return json(res, 400, { error: 'text is required' })
@@ -281,11 +289,11 @@ async function handleCleanTranscript(req: http.IncomingMessage, res: http.Server
         {
           role: 'system',
           content:
-            '你是一个文字整理助手。用户通过语音输入了一段话，可能有口语化表达、重复、冗余、逻辑不清等问题。请将其整理成简洁、清晰、通顺的书面文字。保留用户的核心意思和关键信息，去除口头禅、重复内容和无关废话。只返回整理后的文字，不要解释。',
+            '你是一个速度很快的语音转文字校正助手。用户通过语音输入了一段话，识别结果可能把英文产品名、编程工具、AI 工具识别错。请根据上下文恢复用户真实意图，整理成简洁、清晰、通顺的书面文字。重要：优先校正技术术语，例如 cloud code / claudecode / 克劳德 code 应校正为 Claude Code；code x / codex 应校正为 Codex；open ai 应校正为 OpenAI。保留用户核心意思，不要扩写，不要解释，只返回整理后的文字。',
         },
         {
           role: 'user',
-          content: `请整理这段语音转文字的内容：\n\n${text}`,
+          content: `常见术语：${Array.isArray(terms) ? terms.join('、') : 'Claude Code、Codex、ChatGPT、OpenAI、Vercel、GitHub'}\n\n请整理这段语音转文字的内容：\n\n${text}`,
         },
       ],
       false,
@@ -488,15 +496,17 @@ async function handleGhostScan(req: http.IncomingMessage, res: http.ServerRespon
 
 async function handleIntentMap(req: http.IncomingMessage, res: http.ServerResponse) {
   const body = JSON.parse(await readBody(req))
-  const { fullText } = body
+  const { paragraphs } = body
 
-  if (!fullText || typeof fullText !== 'string') {
-    return json(res, 400, { error: 'fullText is required' })
+  if (!Array.isArray(paragraphs) || paragraphs.length === 0) {
+    return json(res, 400, { error: 'paragraphs is required' })
   }
 
   if (!DEEPSEEK_API_KEY) {
-    return json(res, 500, { error: 'DEEPSEEK_API_KEY is not configured' })
+    return json(res, 200, { nodes: [], edges: [], summary: '', writingGoal: '' })
   }
+
+  const paragraphList = paragraphs.map((p: any) => `[${p.id}] ${p.text}`).join('\n\n')
 
   let result
   try {
@@ -504,21 +514,31 @@ async function handleIntentMap(req: http.IncomingMessage, res: http.ServerRespon
       {
         role: 'system',
         content:
-          '你是一个文章结构分析专家。分析用户的文章，提取核心论点和它们之间的逻辑关系。每个论点关联到文章中的一个段落片段。只返回严格 JSON。',
+          '你是一个写作意图分析专家。分析用户的文章，提取写作意图——包括写作目标、核心主题、目标受众、语气风格、约束条件。识别这些意图之间的关系。只返回严格 JSON，不要用代码块包裹。',
       },
       {
         role: 'user',
-        content: `文章全文：\n${fullText}\n\n返回格式：{"nodes":[{"id":"n1","label":"论点摘要","paragraph":"对应的段落片段","strength":"strong/medium/weak"}],"edges":[{"from":"n1","to":"n2","relation":"supports/contradicts/extends/weakens"}],"summary":"文章整体结构判断"}`,
+        content:
+          `文章段落：\n${paragraphList}\n\n` +
+          '返回格式：\n' +
+          '{\n' +
+          '  "nodes": [{"id":"n1","label":"意图标签","type":"goal/theme/audience/tone/constraint","description":"详细描述","confidence":0.0到1.0}],\n' +
+          '  "edges": [{"from":"n1","to":"n2","relation":"supports/conflicts/depends/enables"}],\n' +
+          '  "summary": "写作意图整体分析",\n' +
+          '  "writingGoal": "核心写作目标的一句话概括"\n' +
+          '}\n\n' +
+          '最多 8 个节点，最多 10 条边。每个 type 至少出现一次。',
       },
-    ])
+    ], 0.3, 1500)
   } catch {
-    return json(res, 200, { nodes: [], edges: [], summary: '' })
+    return json(res, 200, { nodes: [], edges: [], summary: '', writingGoal: '' })
   }
 
   json(res, 200, {
     nodes: Array.isArray(result?.nodes) ? result.nodes : [],
     edges: Array.isArray(result?.edges) ? result.edges : [],
     summary: typeof result?.summary === 'string' ? result.summary : '',
+    writingGoal: typeof result?.writingGoal === 'string' ? result.writingGoal : '',
   })
 }
 
@@ -528,7 +548,7 @@ const coherenceCache = new Map<string, { data: unknown; ts: number }>()
 const COHERENCE_CACHE_TTL = 10_000
 
 function coherenceCacheKey(paragraphs: { id: string; text: string }[]): string {
-  return paragraphs.map((p) => `${p.id}:${p.text.slice(0, 40)}`).join('|')
+  return paragraphs.map((p) => `${p.id}:${p.text.length}:${p.text.slice(0, 30)}...${p.text.slice(-20)}`).join('|')
 }
 
 async function handleCoherenceAgent(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -575,7 +595,7 @@ async function handleCoherenceAgent(req: http.IncomingMessage, res: http.ServerR
     '3. 检测段落间的逻辑关系（supports/contradicts/extends/weakens）\n' +
     '4. 发现结构性问题：矛盾、论点缺乏论据、冗余、缺少结论\n' +
     '5. 生成 0-3 条论证层面的幽灵文字建议（不是错别字，那是另一个系统负责的）\n\n' +
-    '只返回严格 JSON，不要输出 Markdown。'
+    '只返回严格 JSON，不要输出 Markdown，不要用代码块包裹。'
 
   const userMessage =
     `文章段落：\n${paragraphList}${instruction}${decisionsContext}\n\n` +
@@ -597,7 +617,7 @@ async function handleCoherenceAgent(req: http.IncomingMessage, res: http.ServerR
     result = await callDeepSeek([
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userMessage },
-    ])
+    ], 0.3, 2000)
   } catch {
     return json(res, 200, { graph: null, ghostSuggestions: [], structuralNudges: [] })
   }
@@ -685,6 +705,429 @@ async function handleCoherenceAgent(req: http.IncomingMessage, res: http.ServerR
   json(res, 200, responseData)
 }
 
+// ─── Canvas Action Handler ──────────────────────────────────────────────────
+
+const ACTION_PROMPTS: Record<string, string> = {
+  strengthen: '你是中文写作结构编辑。用户给你一个论点段落，你需要生成 2-3 个更强版本。每个版本应该：更有说服力、更具体、逻辑更严密。保留用户的核心观点，不要改变立场。',
+  counterargument: '你是中文写作结构编辑。用户给你一个论点段落，你需要站在对立面生成 2-3 个有力的反驳论点。每个反驳应该有理有据，不是简单否定。',
+  evidence: '你是中文写作结构编辑。用户给你一个论点段落，你需要生成 2-3 条可以支撑这个论点的论据。论据应该具体、可信、有说服力。',
+  rewrite: '你是中文写作编辑。用户给你一个段落，你需要生成 2-3 个改写版本。每个版本保持核心意思，但在表达上有所改进。',
+}
+
+function fallbackCanvasSuggestions(message: string) {
+  const topic = String(message || '').trim().slice(0, 40) || '这篇文章'
+  return [
+    {
+      id: `draft_${Date.now()}_0`,
+      type: 'outline',
+      title: '草稿大纲',
+      content: `1. 先说明你想讨论的主题：${topic}\n2. 写出当前常见问题或真实场景\n3. 提出你的判断和解决方向\n4. 用一个具体例子收束观点`,
+      actionLabel: '放到画布',
+    },
+    {
+      id: `draft_${Date.now()}_1`,
+      type: 'draft',
+      title: '开头草稿',
+      content: `关于「${topic}」，可以先从一个真实使用场景切入，再说明为什么这个问题值得讨论。`,
+      actionLabel: '补全正文',
+    },
+  ]
+}
+
+async function handleCanvasChat(req: http.IncomingMessage, res: http.ServerResponse) {
+  const body = JSON.parse(await readBody(req))
+  const message = typeof body?.message === 'string' ? body.message.trim() : ''
+  if (!message) {
+    return json(res, 400, { error: 'message is required' })
+  }
+
+  if (!DEEPSEEK_API_KEY) {
+    return json(res, 200, {
+      reply: '我先给你拆一个可以放到画布上的草稿方向。',
+      suggestions: fallbackCanvasSuggestions(message),
+    })
+  }
+
+  const history = Array.isArray(body.history)
+    ? body.history.slice(-8).map((m: any) => `${m.role === 'user' ? '用户' : 'AI'}：${m.content}`).join('\n')
+    : ''
+
+  try {
+    const result = await callDeepSeek([
+      {
+        role: 'system',
+        content:
+          '你是 Revision Lens 的 AI 草稿助手。用户正在一张写作草稿画布上构思文章。你要用简洁中文回应，并生成 1-3 个可放到画布或补全正文的结构化建议。不要写长篇说明。只返回严格 JSON。',
+      },
+      {
+        role: 'user',
+        content:
+          `用户输入：${message}\n\n` +
+          `历史对话：\n${history || '无'}\n\n` +
+          `当前文章上下文：\n${String(body.articleContext || '').slice(0, 1800) || '无'}\n\n` +
+          '返回格式：{"reply":"一句简短回应","suggestions":[{"type":"note/outline/draft/question","title":"标题","content":"内容","actionLabel":"放到画布或补全正文"}]}',
+      },
+    ], 0.45, 1400)
+
+    const rawSuggestions = Array.isArray(result?.suggestions) ? result.suggestions : []
+    const suggestions = rawSuggestions
+      .filter((item: any) => item && typeof item.content === 'string' && item.content.trim())
+      .slice(0, 3)
+      .map((item: any, index: number) => ({
+        id: `draft_${Date.now()}_${index}`,
+        type: ['note', 'outline', 'draft', 'question'].includes(item.type) ? item.type : 'note',
+        title: typeof item.title === 'string' && item.title.trim() ? item.title.trim() : '草稿建议',
+        content: item.content.trim(),
+        actionLabel: typeof item.actionLabel === 'string' ? item.actionLabel : undefined,
+      }))
+
+    return json(res, 200, {
+      reply: typeof result?.reply === 'string' && result.reply.trim() ? result.reply.trim() : '我给你整理了几个草稿方向。',
+      suggestions: suggestions.length > 0 ? suggestions : fallbackCanvasSuggestions(message),
+    })
+  } catch {
+    return json(res, 200, {
+      reply: '模型暂时没有返回，我先给你一个可用的草稿起点。',
+      suggestions: fallbackCanvasSuggestions(message),
+    })
+  }
+}
+
+async function handleCanvasAction(req: http.IncomingMessage, res: http.ServerResponse) {
+  const body = JSON.parse(await readBody(req))
+  const { paragraph, action, context } = body
+
+  if (!paragraph || typeof paragraph !== 'string') {
+    return json(res, 400, { error: 'paragraph is required' })
+  }
+  if (!action || !ACTION_PROMPTS[action]) {
+    return json(res, 400, { error: 'action must be one of: strengthen, counterargument, evidence, rewrite' })
+  }
+
+  if (!DEEPSEEK_API_KEY) {
+    return json(res, 200, { original: paragraph, action, variants: [] })
+  }
+
+  try {
+    const systemPrompt = ACTION_PROMPTS[action]
+    const userMessage = `段落内容：\n${paragraph}\n\n${context ? `文章上下文（仅供参考）：\n${context.slice(0, 2000)}\n\n` : ''}请返回 JSON：\n{\n  "variants": [\n    {"text": "改写内容", "explanation": "为什么这样改"}\n  ]\n}`
+
+    const data = await callDeepSeek([
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userMessage },
+    ], 0.5)
+
+    const rawVariants = Array.isArray(data?.variants) ? data.variants : []
+    const variants = rawVariants
+      .filter((v: any) => v && typeof v.text === 'string' && v.text.trim())
+      .map((v: any, i: number) => ({
+        id: `action_${Date.now()}_${i}`,
+        text: v.text.trim(),
+        explanation: typeof v.explanation === 'string' ? v.explanation : '',
+      }))
+
+    return json(res, 200, { original: paragraph, action, variants })
+  } catch (err: any) {
+    return json(res, 200, { original: paragraph, action, variants: [] })
+  }
+}
+
+async function handleAutocomplete(req: http.IncomingMessage, res: http.ServerResponse) {
+  const body = JSON.parse(await readBody(req) || '{}')
+  const paragraphText = typeof body.paragraphText === 'string' ? body.paragraphText.trim() : ''
+  const fullContext = typeof body.fullContext === 'string' ? body.fullContext : ''
+
+  if (!paragraphText) {
+    return json(res, 400, { error: 'paragraphText is required' })
+  }
+
+  if (paragraphText.length < 4) {
+    return json(res, 200, { completion: '' })
+  }
+
+  const lastChar = paragraphText[paragraphText.length - 1]
+  if ('。！？!?；;\n'.includes(lastChar)) {
+    return json(res, 200, { completion: '' })
+  }
+
+  try {
+    const result = await callDashScope([
+      {
+        role: 'system',
+        content:
+          '你是一个中文写作自动补全助手。根据用户正在输入的段落，预测接下来最自然的 5-20 个字。只输出 JSON：{"completion":"续写内容"}。不要重复原文，不要解释。如果原文已经像完整句子，返回空字符串。',
+      },
+      {
+        role: 'user',
+        content: `当前段落：\n${paragraphText}\n\n全文风格参考：\n${fullContext.slice(0, 800)}\n\n只返回 JSON。`,
+      },
+    ], true, 0.45)
+
+    const completion = typeof result?.completion === 'string' ? result.completion.trim() : ''
+    return json(res, 200, { completion })
+  } catch {
+    return json(res, 200, { completion: '' })
+  }
+}
+
+// ─── Web Search ───
+
+async function handleWebSearch(req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    const body = parseJson(await readBody(req))
+    const query = String(body.query || '').trim()
+    const limit = typeof body.limit === 'number' ? body.limit : 8
+
+    if (!query) return json(res, 400, { error: 'query is required' })
+
+    const result = await callDeepSeek([
+      {
+        role: 'system',
+        content: `你是一个搜索助手。根据用户的查询，返回相关的搜索结果。返回 JSON 格式：{"results": [{"title": "标题", "url": "https://...", "snippet": "简短描述"}]}。返回 ${limit} 条结果。URL 必须是真实存在的网站地址。`,
+      },
+      {
+        role: 'user',
+        content: query,
+      },
+    ])
+
+    const results = Array.isArray(result?.results) ? result.results : []
+    return json(res, 200, { results: results.slice(0, limit) })
+  } catch {
+    return json(res, 200, { results: [] })
+  }
+}
+
+// ─── Fetch URL ───
+
+async function handleFetchUrl(req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    const body = parseJson(await readBody(req))
+    const url = String(body.url || '').trim()
+
+    if (!url) return json(res, 400, { error: 'url is required' })
+
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(15_000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; RevisionLens/1.0)' },
+    })
+    if (!response.ok) throw new Error(`Fetch failed: ${response.status}`)
+
+    const html = await response.text()
+
+    // Extract title
+    const titleMatch = html.match(/<title[^>]*>(.*?)<\/title>/is)
+    const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : url
+
+    // Strip HTML to plain text (simple approach)
+    const textContent = html
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    // Build simple HTML for reader
+    const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/is)
+    const htmlContent = bodyMatch
+      ? bodyMatch[1]
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      : `<p>${textContent.slice(0, 50000)}</p>`
+
+    return json(res, 200, {
+      title,
+      content: textContent.slice(0, 200000),
+      htmlContent: htmlContent.slice(0, 200000),
+    })
+  } catch (err: any) {
+    return json(res, 500, { error: err.message || 'Failed to fetch URL' })
+  }
+}
+
+// ─── SSE Streaming ───
+
+async function streamLLMResponse(
+  messages: { role: string; content: string }[],
+  res: http.ServerResponse,
+  options: { provider: 'dashscope' | 'deepseek'; maxTokens?: number },
+) {
+  const url = options.provider === 'deepseek'
+    ? 'https://api.deepseek.com/v1/chat/completions'
+    : 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
+
+  const apiKey = options.provider === 'deepseek' ? DEEPSEEK_API_KEY : DASHSCOPE_API_KEY
+  const model = options.provider === 'deepseek' ? DEEPSEEK_MODEL : DASHSCOPE_MODEL
+
+  const payload: Record<string, unknown> = {
+    model,
+    temperature: 0.6,
+    stream: true,
+    messages,
+  }
+  if (options.maxTokens) payload.max_tokens = options.maxTokens
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(90_000),
+  })
+
+  if (!response.ok) {
+    throw new Error(`${options.provider} error ${response.status}`)
+  }
+
+  const reader = response.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        const data = line.slice(6).trim()
+        if (data === '[DONE]') {
+          res.write('data: [DONE]\n\n')
+          return
+        }
+        try {
+          const parsed = JSON.parse(data)
+          const content = parsed.choices?.[0]?.delta?.content
+          if (content) {
+            res.write(`data: ${JSON.stringify({ content })}\n\n`)
+          }
+        } catch {
+          // Skip malformed JSON chunks
+        }
+      }
+    }
+    res.write('data: [DONE]\n\n')
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+// ─── Source Chat ───
+
+async function handleSourceChat(req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    const body = parseJson(await readBody(req))
+    const message = typeof body?.message === 'string' ? body.message.trim() : ''
+    if (!message) return json(res, 400, { error: 'message is required' })
+
+    const mode = body?.mode === 'long' ? 'long' : 'quick'
+    const sourceContext = String(body?.sourceContext || '').slice(0, 6000)
+    const articleContext = String(body?.articleContext || '').slice(0, 1500)
+
+    const filteredHistory = (Array.isArray(body.history) ? body.history : [])
+      .slice(-10)
+      .filter((m: any) => {
+        if (m.role !== 'assistant') return true
+        const c = String(m.content || '')
+        return !c.startsWith('请求失败') && !c.startsWith('生成失败') && !c.startsWith('请配置 API Key')
+      })
+
+    const systemPrompt = `你是一个专业的写作助手。用户正在撰写一篇文章，你可以基于用户提供的参考资料来帮助写作。
+
+规则：
+- 用简洁清晰的中文回应
+- 如果用户要求写文章/段落/大纲，直接生成可用的内容，不要写多余的说明
+- 如果用户提问，基于参考资料回答
+- 如果没有相关资料，基于你的知识回答并说明
+- 生成的文章内容应该是可直接使用的，不需要用户再修改格式`
+
+    const messages: { role: string; content: string }[] = [
+      { role: 'system', content: systemPrompt },
+    ]
+
+    if (sourceContext) {
+      messages.push({ role: 'system', content: `参考资料：\n${sourceContext}` })
+    }
+
+    for (const m of filteredHistory) {
+      messages.push({ role: m.role, content: m.content })
+    }
+
+    const currentContent = articleContext
+      ? `[当前文章内容]\n${articleContext}\n\n${message}`
+      : message
+    messages.push({ role: 'user', content: currentContent })
+
+    const useStream = body?.stream === true
+
+    // Streaming path
+    if (useStream) {
+      const provider: 'dashscope' | 'deepseek' = (mode === 'long' && DEEPSEEK_API_KEY) ? 'deepseek' : 'dashscope'
+      if ((provider === 'deepseek' && !DEEPSEEK_API_KEY) || (provider === 'dashscope' && !DASHSCOPE_API_KEY)) {
+        return json(res, 501, { error: '请配置 API Key 后使用写作助手功能。' })
+      }
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+      })
+      try {
+        await streamLLMResponse(messages, res, {
+          provider,
+          maxTokens: mode === 'long' ? 2500 : undefined,
+        })
+      } catch (err: any) {
+        const errMsg = err?.message || 'Stream failed'
+        res.write(`data: ${JSON.stringify({ error: errMsg })}\n\n`)
+        res.write('data: [DONE]\n\n')
+      }
+      res.end()
+      return
+    }
+
+    // Non-streaming path (backward compatible)
+    let reply: string
+
+    if (mode === 'long' && DEEPSEEK_API_KEY) {
+      const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: DEEPSEEK_MODEL,
+          temperature: 0.6,
+          max_tokens: 2500,
+          messages,
+        }),
+        signal: AbortSignal.timeout(90_000),
+      })
+      if (!response.ok) throw new Error(`DeepSeek error ${response.status}`)
+      const data = await response.json()
+      reply = data?.choices?.[0]?.message?.content || ''
+    } else if (DASHSCOPE_API_KEY) {
+      reply = await callDashScope(messages, false, 0.6) as string
+    } else {
+      reply = '请配置 API Key 后使用写作助手功能。'
+    }
+
+    reply = String(reply || '').trim()
+    if (!reply) reply = '我没有生成有效回复，请重试。'
+
+    return json(res, 200, { reply })
+  } catch {
+    return json(res, 200, { reply: '生成失败，请重试。' })
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
@@ -701,7 +1144,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // Endpoints that only need DEEPSEEK_API_KEY
-  const deepseekOnlyRoutes = ['/api/revision/ghost-scan', '/api/revision/intent-map', '/api/revision/coherence-agent']
+  const deepseekOnlyRoutes = ['/api/revision/ghost-scan', '/api/revision/intent-map', '/api/revision/coherence-agent', '/api/revision/canvas-action', '/api/revision/canvas-chat', '/api/revision/web-search', '/api/revision/fetch-url', '/api/revision/source-chat']
 
   if (!deepseekOnlyRoutes.includes(req.url ?? '') && !DASHSCOPE_API_KEY) {
     return json(res, 500, { error: 'DASHSCOPE_API_KEY is not configured in .env' })
@@ -714,6 +1157,8 @@ const server = http.createServer(async (req, res) => {
       await handleRewrite(req, res)
     } else if (req.url === '/api/revision/clean-transcript') {
       await handleCleanTranscript(req, res)
+    } else if (req.url === '/api/revision/autocomplete') {
+      await handleAutocomplete(req, res)
     } else if (req.url === '/api/revision/transcribe') {
       await handleTranscribe(req, res)
     } else if (req.url === '/api/revision/ghost-scan') {
@@ -722,6 +1167,16 @@ const server = http.createServer(async (req, res) => {
       await handleIntentMap(req, res)
     } else if (req.url === '/api/revision/coherence-agent') {
       await handleCoherenceAgent(req, res)
+    } else if (req.url === '/api/revision/canvas-action') {
+      await handleCanvasAction(req, res)
+    } else if (req.url === '/api/revision/canvas-chat') {
+      await handleCanvasChat(req, res)
+    } else if (req.url === '/api/revision/web-search') {
+      await handleWebSearch(req, res)
+    } else if (req.url === '/api/revision/fetch-url') {
+      await handleFetchUrl(req, res)
+    } else if (req.url === '/api/revision/source-chat') {
+      await handleSourceChat(req, res)
     } else {
       json(res, 404, { error: 'Not found' })
     }

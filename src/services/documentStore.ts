@@ -46,7 +46,14 @@ function loadAll(): StoredDocument[] {
 }
 
 function saveAll(docs: StoredDocument[]) {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(docs))
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(docs))
+  } catch (err: any) {
+    if (err?.name === 'QuotaExceededError' || err?.code === 22) {
+      throw new Error('存储空间不足，请删除一些文档后重试。')
+    }
+    throw err
+  }
 }
 
 export function getActiveDocId(): string | null {
@@ -96,9 +103,6 @@ export function updateDocument(
   }
   if (updates.content !== undefined) {
     docs[idx].content = updates.content
-    if (updates.title === undefined) {
-      docs[idx].title = extractTitle(updates.content)
-    }
   }
   if (updates.graph !== undefined) {
     docs[idx].graph = updates.graph

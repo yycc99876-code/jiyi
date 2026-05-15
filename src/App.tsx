@@ -3,9 +3,25 @@ import type { Editor } from '@tiptap/react'
 import { BubbleMenu } from '@tiptap/react/menus'
 import StarterKit from '@tiptap/starter-kit'
 import Placeholder from '@tiptap/extension-placeholder'
+import Image from '@tiptap/extension-image'
+import { Table } from '@tiptap/extension-table'
+import TableRow from '@tiptap/extension-table-row'
+import TableCell from '@tiptap/extension-table-cell'
+import TableHeader from '@tiptap/extension-table-header'
+import { TextStyle } from '@tiptap/extension-text-style'
+import { FontFamily } from '@tiptap/extension-text-style/font-family'
+import { FontSize } from '@tiptap/extension-text-style/font-size'
+import Color from '@tiptap/extension-color'
+import TextAlign from '@tiptap/extension-text-align'
+import Underline from '@tiptap/extension-underline'
+import { SlashCommand } from './extensions/slashCommand'
+import { ListKeymap } from './extensions/listKeymap'
+import { filterSlashCommands } from './components/editor/slashCommands'
+import EditorToolbar from './components/editor/EditorToolbar'
 import { AnimatePresence, motion } from 'framer-motion'
 import { diffWords } from 'diff'
 import {
+  BookOpen,
   Check,
   ChevronRight,
   Clock3,
@@ -17,9 +33,11 @@ import {
   Map,
   Moon,
   PenLine,
+  Plus,
   RotateCcw,
   Sparkles,
   Sun,
+  Target,
   Trash2,
   Upload,
   Wand2,
@@ -31,10 +49,14 @@ import RevisionPanel from './components/revision/RevisionPanel'
 import GhostOverlay from './components/ghost/GhostOverlay'
 import type { GhostConsoleState } from './components/ghost/GhostOverlay'
 import IntentPanel from './components/intent/IntentPanel'
+import IntentSpacePanel from './components/intent/IntentSpacePanel'
 import ArgumentCanvas from './components/canvas/ArgumentCanvas'
 import useCoherenceAgent from './hooks/useCoherenceAgent'
+import useIntentSpace from './hooks/useIntentSpace'
+import ChickenProgress from './components/loading/ChickenProgress'
 import {
   importFile,
+  importSourceFile,
   exportTxt,
   exportMarkdown,
   exportDocx,
@@ -52,6 +74,32 @@ import {
 } from './services/documentStore'
 import type { StoredDocument } from './services/documentStore'
 import type { ArgumentGraph, StructuralNudge } from './services/ai/coherenceTypes'
+import {
+  getSourcesByDocId,
+  addSource,
+  updateSource,
+  deleteSource,
+  deleteSourcesByDocId,
+  truncateContent,
+} from './services/sourceStore'
+import type { SourceMaterial } from './services/sourceStore'
+import SourceList from './components/sources/SourceList'
+import SourceImportMenu from './components/sources/SourceImportMenu'
+import SourceReader from './components/sources/SourceReader'
+import WebSearchPanel from './components/sources/WebSearchPanel'
+import WritingChatPanel from './components/sources/WritingChatPanel'
+import type { WritingMessage } from './components/sources/WritingChatPanel'
+import { VoiceInputBar, HandsfreeOverlay, emptyVoiceCapsule } from './components/editor/VoiceInputBar'
+import type { VoiceCapsuleState } from './components/editor/VoiceInputBar'
+import ParticleIntro from './components/effects/ParticleIntro'
+import { playVoiceCue } from './services/ai/voiceCue'
+import {
+  isVoiceRecordingSupported,
+  startRecording,
+  stopRecording,
+  stopRecordingWithMinDuration,
+} from './services/ai/voiceInput'
+import { cleanTranscript } from './services/ai/transcriptCleaner'
 
 type RevisionStatus = 'pending' | 'accepted' | 'ignored'
 
@@ -123,103 +171,18 @@ function normalizeAnalysis(analysis: Analysis): Analysis {
   }
 }
 
-async function createMockAnalysis(selectedText: string): Promise<Analysis> {
-  const clean = selectedText.replace(/\s+/g, ' ').trim()
-  const candidates = [
-    {
-      original: '可以帮助用户更好地完成内容创作',
-      replacement: '能帮助用户把零散想法整理成可继续编辑的内容',
-      reason: '把泛泛的“更好地完成”改成更明确的创作动作。',
-      problem: '表达偏泛，缺少真实写作场景。',
-    },
-    {
-      original: '提升工作效率',
-      replacement: '更快把初稿打磨成可发布的内容',
-      reason: '把抽象收益落到“初稿到发布”的具体结果上。',
-      problem: '收益描述模板化，辨识度不够。',
-    },
-    {
-      original: '生成一大段内容',
-      replacement: '一次性抛出整段改写结果',
-      reason: '更贴近 AI 写作工具的真实交互问题。',
-      problem: '原表达准确，但产品语境还可以更具体。',
-    },
-    {
-      original: '给出建议',
-      replacement: '给出可以被逐条接受或忽略的编辑建议',
-      reason: '补充用户控制权，强化产品差异点。',
-      problem: '没有说明建议如何被用户使用。',
-    },
-    {
-      original: '管理自己的想法',
-      replacement: '整理写作过程中的零散判断和表达草稿',
-      reason: '把“想法”拆成更贴近写作工作流的资产。',
-      problem: '概念较大，不够可感知。',
-    },
-    {
-      original: '变得更加高效',
-      replacement: '在不丢失个人语气的前提下更快完成修改',
-      reason: '补充约束条件，避免听起来像普通效率工具。',
-      problem: '表达过于常见，缺少产品态度。',
-    },
-  ]
-
-  const matched = candidates.filter((item) => clean.includes(item.original)).slice(0, 4)
-  const fallbackOriginal = clean.split(/[，。,.]/)[0] || clean.slice(0, 16)
-  const revisions: Revision[] =
-    matched.length > 0
-      ? matched.map((item, index) => ({
-          id: `rev_${Date.now()}_${index}`,
-          original: item.original,
-          replacement: item.replacement,
-          reason: item.reason,
-          status: 'pending',
-        }))
-      : [
-          {
-            id: `rev_${Date.now()}_0`,
-            original: fallbackOriginal,
-            replacement: `${fallbackOriginal}，并补充更具体的使用场景`,
-            reason: '当前表达可以继续保留，但需要增加一点具体性，避免只停留在结论。',
-            status: 'pending',
-          },
-        ]
-
-  const issues = revisions.map((revision, index) => ({
-    text: revision.original,
-    problem: matched[index]?.problem ?? '表达方向清楚，但还缺少可验证的细节。',
-    suggestion: `建议改为“${revision.replacement}”。`,
-  }))
-
-  return new Promise((resolve) => {
-    window.setTimeout(() => {
-      resolve({
-        summary:
-          '这段文字有清晰的产品判断，但部分表达还偏概括。建议保留原本克制的语气，同时把收益、场景和用户控制感说得更具体。',
-        goals: ['保留原文语气', '增强场景感', '让产品差异更清楚'],
-        issues,
-        revisions,
-      })
-    }, 820)
-  })
-}
-
 async function requestAnalysis(selectedText: string, fullContext: string): Promise<Analysis> {
-  try {
-    const response = await fetch('/api/revision/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ selectedText, fullContext }),
-    })
+  const response = await fetch('/api/revision/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selectedText, fullContext }),
+  })
 
-    if (!response.ok) {
-      throw new Error(`Analyze failed: ${response.status}`)
-    }
-
-    return normalizeAnalysis(await response.json())
-  } catch {
-    return createMockAnalysis(selectedText)
+  if (!response.ok) {
+    throw new Error(`分析请求失败 (${response.status})`)
   }
+
+  return normalizeAnalysis(await response.json())
 }
 
 function findTextRange(editor: Editor, range: SelectionSnapshot, target: string) {
@@ -288,37 +251,95 @@ function DiffView({ original, replacement }: { original: string; replacement: st
 }
 
 function App() {
+  const [showIntro, setShowIntro] = useState(true)
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [selection, setSelection] = useState<SelectionSnapshot | null>(null)
   const [documents, setDocuments] = useState<StoredDocument[]>([])
   const [activeDocId, setActiveDocIdState] = useState<string | null>(null)
   const [history, setHistory] = useState<HistoryItem[]>([])
   const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null)
-  const [leftTab, setLeftTab] = useState<'docs' | 'history'>('docs')
+  const [leftTab, setLeftTab] = useState<'docs' | 'sources' | 'history'>('docs')
+  const [sources, setSources] = useState<SourceMaterial[]>([])
+  const [leftReaderSource, setLeftReaderSource] = useState<SourceMaterial | null>(null)
+  const [importMenuOpen, setImportMenuOpen] = useState(false)
+  const [showWebSearch, setShowWebSearch] = useState(false)
+  const sourceFileInputRef = useRef<HTMLInputElement>(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [darkMode, setDarkMode] = useState(false)
   const [saveState, setSaveState] = useState('已保存')
   const [selectedCount, setSelectedCount] = useState(0)
   const [revisionPanelOpen, setRevisionPanelOpen] = useState(false)
   const [revisionSelection, setRevisionSelection] = useState<SelectionSnapshot | null>(null)
+  const [revisionInitialInstruction, setRevisionInitialInstruction] = useState('')
   const [exportMenuOpen, setExportMenuOpen] = useState(false)
   const [autoStartVoice, setAutoStartVoice] = useState(false)
-  const [rightTab, setRightTab] = useState<'ghost' | 'intent' | 'lens'>('ghost')
+  const [rightTab, setRightTab] = useState<'ghost' | 'intent' | 'coherence' | 'lens' | 'writing'>('ghost')
   const [canvasMode, setCanvasMode] = useState(false)
+  const [writingMessages, setWritingMessages] = useState<WritingMessage[]>([])
+  const [writingLoading, setWritingLoading] = useState(false)
   const [ghostConsole, setGhostConsole] = useState<GhostConsoleState>(emptyGhostConsole)
+  const [voiceCapsule, setVoiceCapsule] = useState<VoiceCapsuleState>(emptyVoiceCapsule)
+  const [voiceMode, setVoiceMode] = useState<'idle' | 'hold' | 'handsfree'>('idle')
+  const [writingChatInput, setWritingChatInput] = useState('')
+  const voiceCapsuleRef = useRef(voiceCapsule)
+  const voiceModeRef = useRef(voiceMode)
+  const writingAppendRef = useRef<((text: string) => void) | null>(null)
+  const handleWritingSendRef = useRef<((message: string, mode: 'quick' | 'long') => Promise<void>) | null>(null)
   const editorCardRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const titleRef = useRef<HTMLHeadingElement>(null)
   const switchingDocRef = useRef(false)
+  const activeDocIdRef = useRef<string | null>(null)
 
   // Initialize: load document list and active doc
   const activeDoc = documents.find((d) => d.id === activeDocId) ?? null
+
+  // Keep ref in sync for useEditor callbacks (avoids stale closure)
+  useEffect(() => { activeDocIdRef.current = activeDocId }, [activeDocId])
 
   const editor = useEditor({
     extensions: [
       StarterKit,
       Placeholder.configure({
-        placeholder: '写一点内容，然后选中一段文字启动 Revision Lens...',
+        placeholder: '先把想法写下来。Revision Lens 会在停顿时浮现幽灵建议，Tab 补全/切换，Enter 接受；输入 / 插入结构，Ctrl 唤起语音。Ctrl+Alt 开启免提...',
       }),
+      SlashCommand.configure({
+        suggestion: {
+          items: ({ query }: { query: string }) => filterSlashCommands(query),
+          command: ({ editor, range, props: item }: { editor: any; range: any; props: any }) => {
+            // Delete trigger text, then replace the current paragraph with the list
+            const { from } = range
+            const $from = editor.state.doc.resolve(from)
+            const parent = $from.parent
+            // If cursor is in an empty-ish paragraph, replace the whole paragraph
+            if (parent.type.name === 'paragraph' && parent.content.size <= 1) {
+              const startPos = $from.start()
+              const endPos = $from.end()
+              editor
+                .chain()
+                .focus()
+                .deleteRange({ from: startPos, to: endPos })
+                .run()
+              item.action(editor.chain().focus()).run()
+            } else {
+              item.action(editor.chain().focus().deleteRange(range)).run()
+            }
+            item.onAfterRun?.()
+          },
+        },
+      }),
+      Image,
+      Table.configure({ resizable: true }),
+      TableRow,
+      TableCell,
+      TableHeader,
+      TextStyle,
+      FontFamily,
+      FontSize,
+      Color,
+      TextAlign.configure({ types: ['heading', 'paragraph'] }),
+      Underline,
+      ListKeymap,
     ],
     content: activeDoc?.content ?? '<p></p>',
     editorProps: {
@@ -334,11 +355,12 @@ function App() {
       if (switchingDocRef.current) return
       setSaveState('保存中')
       const html = editor.getHTML()
-      if (activeDocId) {
-        updateDocument(activeDocId, { content: html })
+      const docId = activeDocIdRef.current
+      if (docId) {
+        updateDocument(docId, { content: html })
         // Update local documents state
         setDocuments((docs) =>
-          docs.map((d) => (d.id === activeDocId ? { ...d, content: html, updatedAt: Date.now() } : d)),
+          docs.map((d) => (d.id === docId ? { ...d, content: html, updatedAt: Date.now() } : d)),
         )
       }
       window.setTimeout(() => setSaveState('已保存'), 280)
@@ -347,23 +369,27 @@ function App() {
 
   const handleGraphUpdate = useCallback(
     (graph: ArgumentGraph, nudges: StructuralNudge[]) => {
-      if (activeDocId) {
-        updateDocument(activeDocId, { graph, nudges })
+      const docId = activeDocIdRef.current
+      if (docId) {
+        updateDocument(docId, { graph, nudges })
         setDocuments((docs) =>
           docs.map((d) =>
-            d.id === activeDocId ? { ...d, graph, nudges, updatedAt: Date.now() } : d,
+            d.id === docId ? { ...d, graph, nudges, updatedAt: Date.now() } : d,
           ),
         )
       }
     },
-    [activeDocId],
+    [],
   )
 
   const coherence = useCoherenceAgent(editor, {
     initialGraph: activeDoc?.graph ?? null,
     initialNudges: activeDoc?.nudges ?? [],
+    resetKey: activeDocId,
     onGraphUpdate: handleGraphUpdate,
   })
+
+  const intentSpace = useIntentSpace(editor)
 
   // Initialize on mount
   useEffect(() => {
@@ -372,8 +398,10 @@ function App() {
     setDocuments(docs)
     setActiveDocIdState(doc.id)
     setActiveDocId(doc.id)
+    setSources(getSourcesByDocId(doc.id))
     setHistory(getStoredHistory())
-    setDarkMode(window.localStorage.getItem(THEME_KEY) === 'dark')
+    const savedTheme = window.localStorage.getItem(THEME_KEY)
+    setDarkMode(savedTheme ? savedTheme === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches)
   }, [])
 
   useEffect(() => {
@@ -387,6 +415,413 @@ function App() {
     document.addEventListener('click', close)
     return () => document.removeEventListener('click', close)
   }, [exportMenuOpen])
+
+  useEffect(() => {
+    if (!importMenuOpen) return
+    const close = () => setImportMenuOpen(false)
+    document.addEventListener('click', close)
+    return () => document.removeEventListener('click', close)
+  }, [importMenuOpen])
+
+  // Source material handlers
+  const handleSourceFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !activeDocId) return
+    try {
+      const result = await importSourceFile(file)
+      const source = addSource({
+        docId: activeDocId,
+        type: 'file',
+        format: result.format,
+        title: result.title,
+        content: truncateContent(result.content),
+        htmlContent: truncateContent(result.htmlContent),
+        originalFileName: result.originalFileName,
+        selected: true,
+        rawDataBase64: result.rawDataBase64 || undefined,
+        mimeType: result.mimeType || undefined,
+      })
+      if (source) {
+        setSources(getSourcesByDocId(activeDocId))
+      } else {
+        alert('存储空间不足，请删除一些已有资料后重试。')
+      }
+    } catch (err: any) {
+      alert(err.message || '导入失败')
+    }
+    // Reset input so the same file can be re-selected
+    e.target.value = ''
+  }
+
+  const handleSourceToggleSelect = (id: string) => {
+    const src = sources.find((s) => s.id === id)
+    if (!src) return
+    updateSource(id, { selected: !src.selected })
+    if (activeDocId) setSources(getSourcesByDocId(activeDocId))
+  }
+
+  const handleSourceDelete = (id: string) => {
+    deleteSource(id)
+    if (activeDocId) setSources(getSourcesByDocId(activeDocId))
+    if (leftReaderSource?.id === id) {
+      setLeftReaderSource(null)
+    }
+  }
+
+  const handleSourceOpen = (source: SourceMaterial) => {
+    setLeftReaderSource(source)
+  }
+
+  const handleSourceReaderBack = () => {
+    setLeftReaderSource(null)
+  }
+
+  const handleWebSearchAdd = (_source: SourceMaterial) => {
+    if (activeDocId) {
+      setSources(getSourcesByDocId(activeDocId))
+    }
+  }
+
+  // Build source context for AI
+  const buildSourceContext = useCallback((srcs: SourceMaterial[]): string => {
+    const MAX_CHARS = 6000
+    let total = 0
+    const parts: string[] = []
+    for (const s of srcs) {
+      const part = `【${s.title}】\n${s.content}`
+      if (total + part.length > MAX_CHARS) {
+        parts.push(part.slice(0, MAX_CHARS - total))
+        break
+      }
+      parts.push(part)
+      total += part.length
+    }
+    return parts.join('\n\n---\n\n')
+  }, [])
+
+  // Writing chat handler
+  const handleWritingSend = useCallback(async (message: string, mode: 'quick' | 'long') => {
+    const userMsg: WritingMessage = {
+      id: `wmsg_${Date.now()}`,
+      role: 'user',
+      content: message,
+    }
+
+    let currentMessages: WritingMessage[] = []
+    setWritingMessages((prev) => {
+      currentMessages = [...prev, userMsg]
+      return currentMessages
+    })
+    setWritingLoading(true)
+
+    try {
+      const selectedSrcs = sources.filter((s) => s.selected)
+      const sourceContext = buildSourceContext(selectedSrcs)
+      const articleContext = editor ? editor.getText().slice(0, 1500) : ''
+
+      const historyToSend = currentMessages
+        .slice(-11, -1)
+        .filter((m) => !m.isError)
+        .map((m) => ({ role: m.role, content: m.content }))
+
+      const res = await fetch('/api/revision/source-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message,
+          history: historyToSend,
+          sourceContext,
+          articleContext,
+          mode,
+          stream: true,
+        }),
+      })
+
+      if (!res.ok) throw new Error(`Chat failed: ${res.status}`)
+
+      const contentType = res.headers.get('content-type') || ''
+
+      if (contentType.includes('text/event-stream') && res.body) {
+        // Streaming path
+        const assistantId = `wmsg_${Date.now()}_a`
+        let accumulated = ''
+
+        setWritingMessages((prev) => [...prev, { id: assistantId, role: 'assistant', content: '' }])
+
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split('\n')
+            buffer = lines.pop() || ''
+
+            for (const line of lines) {
+              if (!line.startsWith('data: ')) continue
+              const data = line.slice(6).trim()
+              if (data === '[DONE]') continue
+
+              try {
+                const parsed = JSON.parse(data)
+                if (parsed.error) throw new Error(parsed.error)
+                if (parsed.content) {
+                  accumulated += parsed.content
+                  setWritingMessages((prev) =>
+                    prev.map((m) => (m.id === assistantId ? { ...m, content: accumulated } : m)),
+                  )
+                }
+              } catch (parseErr: any) {
+                if (parseErr.message && !parseErr.message.includes('JSON')) throw parseErr
+              }
+            }
+          }
+        } finally {
+          reader.releaseLock()
+        }
+
+        if (!accumulated.trim()) {
+          setWritingMessages((prev) =>
+            prev.map((m) => (m.id === assistantId ? { ...m, content: '生成失败，请重试。', isError: true } : m)),
+          )
+        }
+      } else {
+        // Non-streaming fallback
+        const data = await res.json()
+        const assistantMsg: WritingMessage = {
+          id: `wmsg_${Date.now()}_a`,
+          role: 'assistant',
+          content: data.reply || '生成失败，请重试。',
+          isError: !data.reply,
+        }
+        setWritingMessages((prev) => [...prev, assistantMsg])
+      }
+    } catch {
+      const errMsg: WritingMessage = {
+        id: `wmsg_${Date.now()}_e`,
+        role: 'assistant',
+        content: '请求失败，请检查网络后重试。',
+        isError: true,
+      }
+      setWritingMessages((prev) => [...prev, errMsg])
+    } finally {
+      setWritingLoading(false)
+    }
+  }, [sources, editor, buildSourceContext])
+
+  useEffect(() => { handleWritingSendRef.current = handleWritingSend }, [handleWritingSend])
+
+  const writingVoiceKeyHandler = useCallback((e: React.KeyboardEvent) => {
+    if (voiceCapsuleRef.current.phase === 'idle') return false
+    if (e.code === 'Escape') {
+      e.preventDefault()
+      stopRecording()
+      setVoiceCapsule(emptyVoiceCapsule); setVoiceMode('idle')
+      return true
+    }
+    if (voiceCapsuleRef.current.phase !== 'ready') return false
+    if (e.code === 'KeyR' && !voiceCapsuleRef.current.error) {
+      e.preventDefault()
+      const t = voiceCapsuleRef.current.cleanedText.trim()
+      if (t) { handleWritingSendRef.current?.(t, 'quick'); setRightTab('writing'); setVoiceCapsule(emptyVoiceCapsule); setVoiceMode('idle') }
+      return true
+    }
+    if (e.code === 'KeyF') {
+      e.preventDefault()
+      const t = voiceCapsuleRef.current.cleanedText.trim()
+      if (t && writingAppendRef.current) writingAppendRef.current(t)
+      setVoiceCapsule(emptyVoiceCapsule); setVoiceMode('idle')
+      return true
+    }
+    return false
+  }, [])
+
+  // Insert text into editor
+  const handleInsertText = useCallback((text: string) => {
+    if (!editor) return
+    const { from } = editor.state.selection
+    editor.chain().focus().insertContentAt(from, text).run()
+  }, [editor])
+
+  // Voice capsule ref sync
+  useEffect(() => { voiceCapsuleRef.current = voiceCapsule }, [voiceCapsule])
+  useEffect(() => { voiceModeRef.current = voiceMode }, [voiceMode])
+
+  // Voice transcript cleaning
+  const prepareVoiceTranscript = useCallback(async (rawText: string, mode: 'hold' | 'handsfree') => {
+    const transcript = rawText.trim()
+    if (!transcript) {
+      setVoiceCapsule({ phase: 'ready', mode, rawText: '', cleanedText: '', error: '没有听清，可以再说一次' })
+      return
+    }
+    setVoiceCapsule((c) => ({ ...c, phase: 'processing', mode, rawText: transcript, cleanedText: '', error: undefined }))
+    try {
+      const data = await cleanTranscript(transcript)
+      setVoiceCapsule({ phase: 'ready', mode, rawText: transcript, cleanedText: data.cleaned || transcript })
+    } catch {
+      setVoiceCapsule({ phase: 'ready', mode, rawText: transcript, cleanedText: transcript })
+    }
+  }, [])
+
+  // Voice keyboard listeners
+  useEffect(() => {
+    const voiceSupported = isVoiceRecordingSupported()
+    if (!voiceSupported) return
+
+    const pressed = new Set<string>()
+    let ctrlPendingTimer = 0
+    let ctrlComboDetected = false
+
+    // Block voice triggers in non-editor inputs (search, title, etc.)
+    // Allow in: main editor (.editor-prose), writing chat input (.writing-chat-input)
+    const isNonEditorInput = (target: EventTarget | null) => {
+      const el = target as HTMLElement | null
+      if (!el) return false
+      const input = el.closest('input, textarea')
+      if (input) return !input.classList.contains('writing-chat-input')
+      const editable = el.closest('[contenteditable="true"]')
+      if (editable && !editable.classList.contains('editor-prose')) return true
+      return false
+    }
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      pressed.add(e.code)
+
+      // Escape — cancel voice at any phase
+      if (e.code === 'Escape' && voiceCapsuleRef.current.phase !== 'idle') {
+        e.preventDefault()
+        stopRecording()
+        setVoiceCapsule(emptyVoiceCapsule)
+        setVoiceMode('idle')
+        return
+      }
+
+      // R key — confirm voice text (send to AI)
+      if (e.code === 'KeyR' && voiceCapsuleRef.current.phase === 'ready' && !voiceCapsuleRef.current.error) {
+        // In non-editor inputs: block only when voice is ready (prevents typing 'r')
+        if (isNonEditorInput(e.target)) return
+        e.preventDefault()
+        const text = voiceCapsuleRef.current.cleanedText.trim()
+        if (text) {
+          handleWritingSendRef.current?.(text, 'quick')
+          setRightTab('writing')
+          setVoiceCapsule(emptyVoiceCapsule)
+          setVoiceMode('idle')
+        }
+        return
+      }
+
+      // F key — append voice text to input / switch to writing tab
+      if (e.code === 'KeyF' && voiceCapsuleRef.current.phase === 'ready') {
+        if (isNonEditorInput(e.target)) return
+        e.preventDefault()
+        const text = voiceCapsuleRef.current.cleanedText.trim()
+        if (text) {
+          const target = e.target as HTMLElement
+          const inWritingInput = !!target.closest('.writing-chat-input')
+          if (inWritingInput && writingAppendRef.current) {
+            // Already in writing chat input: append without replacing user text
+            writingAppendRef.current(text)
+          } else {
+            // In editor or elsewhere: set as new input and switch tab
+            setWritingChatInput(text)
+            setRightTab('writing')
+          }
+        }
+        setVoiceCapsule(emptyVoiceCapsule)
+        setVoiceMode('idle')
+        return
+      }
+
+      // Alt+Ctrl — toggle hands-free mode (works in editor too)
+      if (e.altKey && e.ctrlKey) {
+        if (isNonEditorInput(e.target)) return
+        e.preventDefault()
+        setVoiceMode((current) => {
+          if (current === 'handsfree') {
+            // Turn off hands-free
+            const text = stopRecording()
+            playVoiceCue('handsfree')
+            void prepareVoiceTranscript(text, 'handsfree')
+            return 'idle'
+          } else if (current === 'idle') {
+            // Turn on hands-free (only from idle, not from hold)
+            playVoiceCue('handsfree')
+            setVoiceCapsule({ ...emptyVoiceCapsule, phase: 'recording', mode: 'handsfree' })
+            startRecording(
+              (text) => setVoiceCapsule((c) => ({ ...c, rawText: text })),
+              (error) => console.warn('Voice error:', error),
+            )
+            return 'handsfree'
+          }
+          return current
+        })
+        return
+      }
+
+      // Ctrl — hold to talk with combo detection
+      // Start recognition immediately, cancel within 120ms if a combo key is detected
+      if (e.key === 'Control' && !e.altKey && !e.shiftKey) {
+        if (isNonEditorInput(e.target)) return
+        if (voiceModeRef.current !== 'idle') return
+        ctrlComboDetected = false
+        playVoiceCue('hold')
+        setVoiceCapsule({ ...emptyVoiceCapsule, phase: 'recording', mode: 'hold' })
+        setVoiceMode('hold')
+        startRecording(
+          (text) => setVoiceCapsule((c) => ({ ...c, rawText: text })),
+          (error) => console.warn('Voice error:', error),
+        )
+        ctrlPendingTimer = window.setTimeout(() => {
+          ctrlPendingTimer = 0
+          // If combo was detected during the window, stop the recording we started
+          if (ctrlComboDetected && voiceModeRef.current === 'hold') {
+            stopRecording()
+            setVoiceCapsule(emptyVoiceCapsule)
+            setVoiceMode('idle')
+          }
+        }, 120)
+      }
+
+      // Any non-modifier key while Ctrl is pending → mark as combo
+      if (ctrlPendingTimer && !e.key.startsWith('Shift') && !e.key.startsWith('Alt') && !e.key.startsWith('Control')) {
+        ctrlComboDetected = true
+      }
+    }
+
+    const onKeyUp = (e: KeyboardEvent) => {
+      pressed.delete(e.code)
+
+      // Release Ctrl
+      if (e.key === 'Control') {
+        // Cancel pending timer if Ctrl released before timeout
+        if (ctrlPendingTimer) {
+          window.clearTimeout(ctrlPendingTimer)
+          ctrlPendingTimer = 0
+        }
+        // Stop hold-to-talk if voice is active (ensure minimum recording duration)
+        if (voiceModeRef.current === 'hold') {
+          setVoiceMode('idle')
+          void stopRecordingWithMinDuration().then((text) => {
+            void prepareVoiceTranscript(text, 'hold')
+          })
+        }
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+      if (ctrlPendingTimer) window.clearTimeout(ctrlPendingTimer)
+      stopRecording()
+    }
+  }, [prepareVoiceTranscript])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -413,6 +848,18 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [editor, revisionPanelOpen])
 
+  // Listen for AI writing request from slash command
+  useEffect(() => {
+    if (!editor) return
+    const handler = () => {
+      const text = editor.getText()
+      setRevisionSelection({ from: 0, to: 0, text: text.slice(0, 200) })
+      setRevisionPanelOpen(true)
+    }
+    editor.view.dom.addEventListener('slash-ai-writing', handler)
+    return () => editor.view.dom.removeEventListener('slash-ai-writing', handler)
+  }, [editor])
+
   const runAnalysis = async () => {
     if (!editor) return
     const { from, to, empty } = editor.state.selection
@@ -424,9 +871,10 @@ function App() {
     setSelection(snapshot)
     setIsAnalyzing(true)
     setActiveHistoryId(null)
+    setRightTab('lens')
 
     try {
-      const result = normalizeAnalysis(await requestAnalysis(text, editor.getText()))
+      const result = await requestAnalysis(text, editor.getText())
       setAnalysis(result)
 
       const item: HistoryItem = {
@@ -439,6 +887,8 @@ function App() {
       const nextHistory = [item, ...history].slice(0, 12)
       setHistory(nextHistory)
       window.localStorage.setItem(HISTORY_KEY, JSON.stringify(nextHistory))
+    } catch (err: any) {
+      alert(err?.message || '分析失败，请检查网络后重试')
     } finally {
       setIsAnalyzing(false)
     }
@@ -450,12 +900,13 @@ function App() {
     window.localStorage.removeItem(HISTORY_KEY)
   }
 
-  const openRevisionPanel = () => {
+  const openRevisionPanel = (initialInstruction = '') => {
     if (!editor) return
     const { from, to, empty } = editor.state.selection
     const text = empty ? '' : editor.state.doc.textBetween(from, to, '').trim()
     if (!text) return
     setRevisionSelection({ from, to, text })
+    setRevisionInitialInstruction(initialInstruction)
     setRevisionPanelOpen(true)
   }
 
@@ -463,6 +914,7 @@ function App() {
     if (!editor || !revisionSelection) return
     editor.chain().focus().insertContentAt(revisionSelection, replacement).run()
     setRevisionPanelOpen(false)
+    setRevisionInitialInstruction('')
     setAutoStartVoice(false)
   }
 
@@ -514,13 +966,21 @@ function App() {
       editor.commands.setContent(target.content)
       setAnalysis(null)
       setSelection(null)
+      setRevisionPanelOpen(false)
+      setCanvasMode(false)
+      setSources(getSourcesByDocId(docId))
+      setLeftReaderSource(null)
+      setWritingMessages([])
 
       // Update local docs state
       setDocuments(getAllDocuments())
 
       // Release guard after editor processes the content change
+      // Double rAF ensures Tiptap has fully committed the content change
       requestAnimationFrame(() => {
-        switchingDocRef.current = false
+        requestAnimationFrame(() => {
+          switchingDocRef.current = false
+        })
       })
     },
     [editor, activeDocId],
@@ -536,26 +996,55 @@ function App() {
 
     const doc = createDocument('<p></p>')
     setDocuments(getAllDocuments())
+    setActiveDocId(doc.id)
     setActiveDocIdState(doc.id)
+    setSources([])
+    setLeftReaderSource(null)
+    setWritingMessages([])
 
     switchingDocRef.current = true
     editor.commands.setContent('<p></p>')
     setAnalysis(null)
     setSelection(null)
     requestAnimationFrame(() => {
-      switchingDocRef.current = false
+      requestAnimationFrame(() => {
+        switchingDocRef.current = false
+      })
     })
   }, [editor, activeDocId])
 
   const deleteDoc = useCallback(
     (docId: string) => {
+      // Save current editor content before deletion
+      if (docId === activeDocId && editor) {
+        updateDocument(docId, { content: editor.getHTML() })
+      }
+
       deleteDocument(docId)
+      deleteSourcesByDocId(docId)
       const docs = getAllDocuments()
       setDocuments(docs)
 
       // If deleted the active doc, switch to the most recent
       if (docId === activeDocId && docs.length > 0) {
-        switchDocument(docs[0].id)
+        const target = docs[0]
+        setActiveDocId(target.id)
+        setActiveDocIdState(target.id)
+        if (editor) {
+          switchingDocRef.current = true
+          editor.commands.setContent(target.content)
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              switchingDocRef.current = false
+            })
+          })
+        }
+        setAnalysis(null)
+        setSelection(null)
+        setCanvasMode(false)
+        setSources(getSourcesByDocId(target.id))
+        setLeftReaderSource(null)
+        setWritingMessages([])
       } else if (docs.length === 0) {
         // No docs left, create a new one
         const doc = createDocument('<p></p>')
@@ -565,12 +1054,14 @@ function App() {
           switchingDocRef.current = true
           editor.commands.setContent('<p></p>')
           requestAnimationFrame(() => {
-            switchingDocRef.current = false
+            requestAnimationFrame(() => {
+              switchingDocRef.current = false
+            })
           })
         }
       }
     },
-    [activeDocId, editor, switchDocument],
+    [activeDocId, editor],
   )
 
   const resetDocument = useCallback(() => {
@@ -580,18 +1071,31 @@ function App() {
 <p>我希望做一个更自然的编辑器体验，让 AI 不只是替用户写东西，而是在合适的时候给出建议。这个产品可以帮助用户管理自己的想法，并让写作过程变得更加高效。</p>
 <p>真正好的 AI Writing 产品应该尊重用户原本的表达，理解用户正在写什么，并在需要的时候提供可以被用户控制的修改。</p>`
 
-    if (activeDocId) {
-      updateDocument(activeDocId, { content: sample })
-      setDocuments(getAllDocuments())
-    }
+    const newDoc = createDocument(sample)
+    updateDocument(newDoc.id, { title: '示例文章' })
+    setDocuments(getAllDocuments())
+    setActiveDocId(newDoc.id)
+    setActiveDocIdState(newDoc.id)
     switchingDocRef.current = true
     editor.commands.setContent(sample)
     setAnalysis(null)
     setSelection(null)
     requestAnimationFrame(() => {
-      switchingDocRef.current = false
+      requestAnimationFrame(() => {
+        switchingDocRef.current = false
+      })
     })
-  }, [editor, activeDocId])
+  }, [editor])
+
+  // Sync title element when active document changes
+  useEffect(() => {
+    if (titleRef.current) {
+      const title = activeDoc?.title || '未命名文档'
+      if (titleRef.current.textContent !== title) {
+        titleRef.current.textContent = title
+      }
+    }
+  }, [activeDoc?.title, activeDocId])
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -605,14 +1109,18 @@ function App() {
       // Create new doc with imported content
       const doc = createDocument(html)
       setDocuments(getAllDocuments())
+      setActiveDocId(doc.id)
       setActiveDocIdState(doc.id)
 
       switchingDocRef.current = true
       editor.commands.setContent(html)
       setAnalysis(null)
       setSelection(null)
+      // Double rAF ensures Tiptap has fully committed the content change
       requestAnimationFrame(() => {
-        switchingDocRef.current = false
+        requestAnimationFrame(() => {
+          switchingDocRef.current = false
+        })
       })
     } catch (err: any) {
       alert(err.message)
@@ -624,22 +1132,87 @@ function App() {
     (paragraph: string) => {
       if (!editor) return
       const doc = editor.state.doc
+      const searchKey = paragraph.slice(0, 30)
       let found = -1
       doc.nodesBetween(0, doc.content.size, (node, pos) => {
-        if (found !== -1 || !node.isText || !node.text) return false
-        if (node.text.includes(paragraph.slice(0, 20))) {
+        if (found !== -1 || !node.isBlock || node.type.name === 'doc') return true
+        if (node.textContent.includes(searchKey)) {
           found = pos
         }
         return false
       })
       if (found !== -1) {
         editor.commands.focus(found)
-        const editorEl = editor.view.dom
-        editorEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        try {
+          const { node } = editor.view.domAtPos(found)
+          const el = node instanceof HTMLElement ? node : node.parentElement
+          el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        } catch {
+          // domAtPos can throw for out-of-range positions
+        }
       }
     },
     [editor],
   )
+
+  const handleAcceptVariant = useCallback(
+    (originalParagraph: string, newText: string): boolean => {
+      if (!editor) return false
+      const doc = editor.state.doc
+      const searchKey = originalParagraph.slice(0, 40)
+      let found: { from: number; to: number; nodeName: string } | null = null
+
+      doc.nodesBetween(0, doc.content.size, (node, pos) => {
+        if (found || !node.isBlock || node.type.name === 'doc') return true
+        if (node.textContent.includes(searchKey)) {
+          found = { from: pos, to: pos + node.nodeSize, nodeName: node.type.name }
+        }
+        return false
+      })
+
+      if (found) {
+        const { from, to, nodeName } = found
+        const tag = ['heading', 'blockquote'].includes(nodeName) ? nodeName : 'p'
+        const attrs = nodeName === 'heading' ? ' level="2"' : ''
+        const escaped = newText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        editor.chain().focus().deleteRange({ from, to }).insertContentAt(from, `<${tag}${attrs}>${escaped}</${tag}>`).run()
+        setDocuments(getAllDocuments())
+        return true
+      }
+      return false
+    },
+    [editor],
+  )
+
+  const handleAppendDraft = useCallback(
+    (text: string) => {
+      if (!editor) return
+      const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      const safeText = text
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map((line) => `<p>${escapeHtml(line)}</p>`)
+        .join('')
+      editor.chain().focus('end').insertContent(safeText || `<p>${text}</p>`).run()
+      if (activeDocId) {
+        requestAnimationFrame(() => {
+          updateDocument(activeDocId, { content: editor.getHTML() })
+          setDocuments(getAllDocuments())
+        })
+      }
+    },
+    [activeDocId, editor],
+  )
+
+  const renameActiveDocument = useCallback(() => {
+    if (!activeDocId) return
+    const currentTitle = activeDoc?.title || '未命名文档'
+    const nextTitle = window.prompt('重命名文件', currentTitle)?.trim()
+    if (!nextTitle || nextTitle === currentTitle) return
+    updateDocument(activeDocId, { title: nextTitle })
+    setDocuments(getAllDocuments())
+  }, [activeDoc?.title, activeDocId])
 
   const handleExport = async (format: 'docx' | 'doc' | 'txt' | 'markdown') => {
     if (!editor) return
@@ -647,19 +1220,23 @@ function App() {
     const fileName = `revision-lens-export`
     setExportMenuOpen(false)
 
-    switch (format) {
-      case 'docx':
-        await exportDocx(html, fileName)
-        break
-      case 'doc':
-        exportDoc(html, fileName)
-        break
-      case 'txt':
-        exportTxt(html, fileName)
-        break
-      case 'markdown':
-        exportMarkdown(html, fileName)
-        break
+    try {
+      switch (format) {
+        case 'docx':
+          await exportDocx(html, fileName)
+          break
+        case 'doc':
+          exportDoc(html, fileName)
+          break
+        case 'txt':
+          exportTxt(html, fileName)
+          break
+        case 'markdown':
+          exportMarkdown(html, fileName)
+          break
+      }
+    } catch (err: any) {
+      alert(err?.message || '导出失败，请重试')
     }
   }
 
@@ -673,7 +1250,15 @@ function App() {
   const activeGhost = activeGhostIndex >= 0 ? ghostConsole.suggestions[activeGhostIndex] : null
 
   return (
-    <main className="app-shell">
+    <>
+      {showIntro && (
+        <ParticleIntro
+          darkMode={darkMode}
+          onComplete={() => setShowIntro(false)}
+          onToggleTheme={() => setDarkMode((value) => !value)}
+        />
+      )}
+      <main className="app-shell" aria-hidden={showIntro}>
       <section className="topbar">
         <div className="brand">
           <div className="brand-mark">
@@ -692,6 +1277,13 @@ function App() {
             accept=".doc,.docx,.txt,.md,.markdown"
             style={{ display: 'none' }}
             onChange={handleImport}
+          />
+          <input
+            ref={sourceFileInputRef}
+            type="file"
+            accept=".txt,.md,.markdown,.docx,.pdf"
+            style={{ display: 'none' }}
+            onChange={handleSourceFileUpload}
           />
           <button className="ghost-button" onClick={newDocument} type="button">
             <FilePlus size={15} />
@@ -722,7 +1314,7 @@ function App() {
           </button>
           <button
             className={`ghost-button ${canvasMode ? 'active' : ''}`}
-            onClick={() => setCanvasMode(true)}
+            onClick={() => setCanvasMode((v) => !v)}
             type="button"
           >
             <LayoutGrid size={15} />
@@ -752,6 +1344,14 @@ function App() {
                 文章
               </button>
               <button
+                className={`panel-tab ${leftTab === 'sources' ? 'active' : ''}`}
+                onClick={() => setLeftTab('sources')}
+                type="button"
+              >
+                <BookOpen size={13} />
+                资料库
+              </button>
+              <button
                 className={`panel-tab ${leftTab === 'history' ? 'active' : ''}`}
                 onClick={() => setLeftTab('history')}
                 type="button"
@@ -765,6 +1365,25 @@ function App() {
                 <FilePlus size={13} />
                 新建
               </button>
+            )}
+            {leftTab === 'sources' && (
+              <div className="source-add-wrap">
+                <button
+                  className="text-button"
+                  onClick={(e) => { e.stopPropagation(); setImportMenuOpen(!importMenuOpen) }}
+                  type="button"
+                >
+                  <Plus size={13} />
+                  添加
+                </button>
+                {importMenuOpen && (
+                  <SourceImportMenu
+                    onUpload={() => sourceFileInputRef.current?.click()}
+                    onSearch={() => { setShowWebSearch(true); setLeftTab('sources') }}
+                    onClose={() => setImportMenuOpen(false)}
+                  />
+                )}
+              </div>
             )}
             {leftTab === 'history' && history.length > 0 && (
               <button className="text-button" onClick={clearHistory} type="button">
@@ -832,6 +1451,25 @@ function App() {
                 })
               )}
             </div>
+          ) : leftTab === 'sources' ? (
+            leftReaderSource ? (
+              <SourceReader material={leftReaderSource} onBack={handleSourceReaderBack} />
+            ) : showWebSearch && activeDocId ? (
+              <WebSearchPanel
+                onBack={() => setShowWebSearch(false)}
+                onAdd={handleWebSearchAdd}
+                docId={activeDocId}
+              />
+            ) : (
+              <SourceList
+                sources={sources}
+                onToggleSelect={handleSourceToggleSelect}
+                onDelete={handleSourceDelete}
+                onOpen={handleSourceOpen}
+                onUpload={() => sourceFileInputRef.current?.click()}
+                onSearch={() => setShowWebSearch(true)}
+              />
+            )
           ) : (
             <div className="history-list">
               {history.length === 0 ? (
@@ -870,10 +1508,14 @@ function App() {
             <div>
               <p className="eyebrow">Document</p>
               <h1
-                contentEditable
+                ref={titleRef}
+                contentEditable={false}
                 suppressContentEditableWarning
                 spellCheck={false}
                 className="doc-title-editable"
+                data-protected="filename"
+                title="双击重命名文件"
+                onDoubleClick={renameActiveDocument}
                 onBlur={(e) => {
                   const newTitle = e.currentTarget.textContent?.trim() || ''
                   if (activeDocId && newTitle && newTitle !== activeDoc?.title) {
@@ -889,14 +1531,29 @@ function App() {
                     e.currentTarget.blur()
                   }
                 }}
-                dangerouslySetInnerHTML={{ __html: activeDoc?.title || '未命名文档' }}
               />
             </div>
             <div className="editor-stats">
               <FileText size={15} />
-              <span>Prototype</span>
+              <span>{editor ? `${editor.getText().length} 字` : ''}</span>
             </div>
           </div>
+
+          {editor && (
+            <EditorToolbar
+              editor={editor}
+              selectedCount={selectedCount}
+              onSelectionRewrite={(instruction = '') => openRevisionPanel(instruction)}
+              onFullTextRewrite={(instruction = '') => {
+                if (!editor) return
+                const text = editor.getText()
+                if (!text.trim()) return
+                setRevisionSelection({ from: 0, to: editor.state.doc.content.size, text })
+                setRevisionInitialInstruction(instruction || '重写全文，让结构更清楚，表达更自然。')
+                setRevisionPanelOpen(true)
+              }}
+            />
+          )}
 
           <div className="editor-card" ref={editorCardRef}>
             {editor && (
@@ -909,7 +1566,7 @@ function App() {
                   <Sparkles size={15} />
                   诊断并改写
                 </button>
-                <button onClick={openRevisionPanel} type="button">
+                <button onClick={() => openRevisionPanel()} type="button">
                   <Wand2 size={15} />
                   自定义修改
                 </button>
@@ -920,8 +1577,10 @@ function App() {
               {revisionPanelOpen && revisionSelection && (
                 <RevisionPanel
                   selectedText={revisionSelection.text}
+                  initialInstruction={revisionInitialInstruction}
                   onClose={() => {
                     setRevisionPanelOpen(false)
+                    setRevisionInitialInstruction('')
                     setAutoStartVoice(false)
                   }}
                   onAccept={acceptRevisionRewrite}
@@ -937,6 +1596,10 @@ function App() {
                 coherenceSuggestions={coherence.coherenceGhostSuggestions}
               />
             )}
+          </div>
+
+          <div className="editor-voice-layer">
+            <VoiceInputBar capsule={voiceCapsule} />
           </div>
 
           <div className="editor-footer">
@@ -974,6 +1637,14 @@ function App() {
                 onClick={() => setRightTab('intent')}
                 type="button"
               >
+                <Target size={14} />
+                意图空间
+              </button>
+              <button
+                className={`panel-tab ${rightTab === 'coherence' ? 'active' : ''}`}
+                onClick={() => setRightTab('coherence')}
+                type="button"
+              >
                 <Map size={14} />
                 连贯性
               </button>
@@ -984,6 +1655,14 @@ function App() {
               >
                 <PenLine size={14} />
                 诊断
+              </button>
+              <button
+                className={`panel-tab ${rightTab === 'writing' ? 'active' : ''}`}
+                onClick={() => setRightTab('writing')}
+                type="button"
+              >
+                <Sparkles size={14} />
+                写作
               </button>
             </div>
           </div>
@@ -1079,6 +1758,14 @@ function App() {
               </div>
             )
           ) : rightTab === 'intent' ? (
+            <IntentSpacePanel
+              intentMap={intentSpace.intentMap}
+              isScanning={intentSpace.isScanning}
+              scanStage={intentSpace.scanStage}
+              scanError={intentSpace.scanError}
+              onScanNow={intentSpace.scanNow}
+            />
+          ) : rightTab === 'coherence' ? (
             <IntentPanel
               graph={coherence.graph}
               nudges={coherence.nudges}
@@ -1093,11 +1780,21 @@ function App() {
               onStrengthenNode={coherence.strengthenNode}
               onDismissNudge={coherence.dismissNudge}
             />
+          ) : rightTab === 'writing' ? (
+            <WritingChatPanel
+              messages={writingMessages}
+              loading={writingLoading}
+              selectedSources={sources.filter((s) => s.selected)}
+              onSend={handleWritingSend}
+              onInsertText={handleInsertText}
+              externalInput={writingChatInput}
+              appendInputRef={writingAppendRef}
+              onVoiceKey={writingVoiceKeyHandler}
+            />
           ) : isAnalyzing ? (
             <div className="loading-state">
-              <Loader2 className="spin" size={24} />
-              <h3>正在阅读你的文本</h3>
-              <p>Revision Lens 会拆解问题、修改意图和可逐条接受的建议。</p>
+              <ChickenProgress stage="reading" label="正在阅读你的文本" />
+              <p style={{ marginTop: 8 }}>Revision Lens 会拆解问题、修改意图和可逐条接受的建议。</p>
             </div>
           ) : !analysis ? (
             <div className="empty-lens">
@@ -1177,16 +1874,22 @@ function App() {
         </aside>
       </section>
 
-      {canvasMode && (
-        <ArgumentCanvas
-          graph={coherence.graph}
-          nudges={coherence.nudges}
-          isScanning={coherence.isScanning}
-          onClose={() => setCanvasMode(false)}
-          onNodeClick={handleIntentNodeClick}
-        />
-      )}
-    </main>
+      <ArgumentCanvas
+        visible={canvasMode}
+        sessionKey={activeDocId ?? 'no-document'}
+        graph={coherence.graph}
+        nudges={coherence.nudges}
+        isScanning={coherence.isScanning}
+        scanError={coherence.scanError}
+        onClose={() => setCanvasMode(false)}
+        onNodeClick={handleIntentNodeClick}
+        onAcceptVariant={handleAcceptVariant}
+        onScanNow={coherence.scanNow}
+        onAppendDraft={handleAppendDraft}
+      />
+        <HandsfreeOverlay active={voiceMode === 'handsfree'} />
+      </main>
+    </>
   )
 }
 

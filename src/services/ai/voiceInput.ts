@@ -22,9 +22,25 @@ interface SpeechRecognitionInstance {
 
 let recognition: SpeechRecognitionInstance | null = null
 let finalTranscript = ''
+let latestInterimTranscript = ''
+let lastEmittedTranscript = ''
 let isRecordingActive = false
 let retryCount = 0
+let recordingStartTime = 0
 const MAX_RETRIES = 2
+const MIN_RECORDING_MS = 600
+
+function appendTranscript(base: string, chunk: string) {
+  const cleanChunk = chunk.trim()
+  if (!cleanChunk) return base
+  if (!base.trim()) return cleanChunk
+  return `${base.trim()} ${cleanChunk}`
+}
+
+function getCombinedTranscript() {
+  const combined = appendTranscript(finalTranscript, latestInterimTranscript)
+  return (combined || lastEmittedTranscript).trim()
+}
 
 export function isVoiceRecordingSupported(): boolean {
   return typeof window !== 'undefined' && !!(window.SpeechRecognition || window.webkitSpeechRecognition)
@@ -39,11 +55,14 @@ export function startRecording(
   recognition.lang = 'zh-CN'
   recognition.continuous = true
   recognition.interimResults = true
-  recognition.maxAlternatives = 1
+  recognition.maxAlternatives = 3
 
   finalTranscript = ''
+  latestInterimTranscript = ''
+  lastEmittedTranscript = ''
   isRecordingActive = true
   retryCount = 0
+  recordingStartTime = Date.now()
 
   recognition.onresult = (event: any) => {
     retryCount = 0
@@ -51,12 +70,14 @@ export function startRecording(
     for (let i = event.resultIndex; i < event.results.length; i++) {
       const transcript = event.results[i][0].transcript
       if (event.results[i].isFinal) {
-        finalTranscript += transcript
+        finalTranscript = appendTranscript(finalTranscript, transcript)
       } else {
-        interim += transcript
+        interim = appendTranscript(interim, transcript)
       }
     }
-    onInterim?.(finalTranscript + interim)
+    latestInterimTranscript = interim
+    lastEmittedTranscript = getCombinedTranscript()
+    onInterim?.(lastEmittedTranscript)
   }
 
   recognition.onerror = (event: any) => {
@@ -103,7 +124,19 @@ export function startRecording(
 }
 
 export function getFinalTranscript(): string {
-  return finalTranscript.trim()
+  return getCombinedTranscript()
+}
+
+export function getRecordingDuration(): number {
+  return recordingStartTime ? Date.now() - recordingStartTime : 0
+}
+
+export async function stopRecordingWithMinDuration(): Promise<string> {
+  const elapsed = recordingStartTime ? Date.now() - recordingStartTime : 0
+  if (elapsed < MIN_RECORDING_MS && isRecordingActive) {
+    await new Promise((r) => setTimeout(r, MIN_RECORDING_MS - elapsed))
+  }
+  return stopRecording()
 }
 
 export function stopRecording(): string {
@@ -116,7 +149,7 @@ export function stopRecording(): string {
     }
     recognition = null
   }
-  return finalTranscript.trim()
+  return getCombinedTranscript()
 }
 
 export function cancelRecording(): void {
@@ -130,4 +163,6 @@ export function cancelRecording(): void {
     recognition = null
   }
   finalTranscript = ''
+  latestInterimTranscript = ''
+  lastEmittedTranscript = ''
 }

@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Map,
-  Loader2,
   Zap,
   RefreshCw,
   AlertTriangle,
@@ -14,6 +13,7 @@ import {
   Check,
   SkipForward,
 } from 'lucide-react'
+import ChickenProgress from '../loading/ChickenProgress'
 import ArticleMap from './ArticleMap'
 import type { ArgumentGraph, ArgumentNode, StructuralNudge } from '../../services/ai/coherenceTypes'
 import type { ScanStage } from '../../hooks/useCoherenceAgent'
@@ -34,7 +34,7 @@ interface Props {
   onNodeClick: (paragraph: string) => void
   onChallengeEdge: (from: string, to: string) => void
   onStrengthenNode: (nodeId: string) => void
-  onDismissNudge: (index: number) => void
+  onDismissNudge: (nudgeKey: string) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ function stageLabel(stage: ScanStage): string {
 // ---------------------------------------------------------------------------
 
 function ScoreGrade({ score }: { score: number }) {
-  const { color, level } = coherenceLabel(score)
+  const { color, level, text } = coherenceLabel(score)
   const percent = Math.round(score * 100)
 
   return (
@@ -164,7 +164,7 @@ function ScoreGrade({ score }: { score: number }) {
       </div>
       {/* Node / edge stats */}
       <div className="coherence-score-stats">
-        <span><Activity size={10} /> {coherenceLabel(score).text}</span>
+        <span><Activity size={10} /> {text}</span>
       </div>
     </motion.div>
   )
@@ -249,10 +249,7 @@ function ScanStatusBar({
       {/* Left: status indicator */}
       <div className="scan-status-left">
         {isScanning ? (
-          <>
-            <Loader2 size={12} className="spin" />
-            <span className="scan-stage-label">{stageLabel(scanStage)}</span>
-          </>
+          <ChickenProgress compact stage={scanStage === 'preparing' ? 'reading' : scanStage === 'requesting' ? 'reasoning' : scanStage === 'parsing' ? 'polishing' : undefined} label={stageLabel(scanStage)} />
         ) : scanError ? (
           <>
             <AlertTriangle size={12} style={{ color: 'var(--red)' }} />
@@ -311,17 +308,17 @@ export default function IntentPanel({
   const [skippedCount, setSkippedCount] = useState(0)
 
   const handleMissionHandled = useCallback(
-    (index: number) => {
+    (nudgeKey: string) => {
       setHandledCount((c) => c + 1)
-      onDismissNudge(index)
+      onDismissNudge(nudgeKey)
     },
     [onDismissNudge],
   )
 
   const handleMissionSkipped = useCallback(
-    (index: number) => {
+    (nudgeKey: string) => {
       setSkippedCount((c) => c + 1)
-      onDismissNudge(index)
+      onDismissNudge(nudgeKey)
     },
     [onDismissNudge],
   )
@@ -342,7 +339,7 @@ export default function IntentPanel({
         </div>
         <div className="intent-empty">
           <Shield size={18} />
-          <p>配置 DEEPSEEK_API_KEY 后启用连贯性分析。</p>
+          <p>配置 DASHSCOPE_API_KEY 后启用连贯性分析。</p>
         </div>
       </div>
     )
@@ -460,7 +457,25 @@ export default function IntentPanel({
                         className="nudge-indicator"
                         style={{ background: nudgeSeverityColor(nudge.severity) }}
                       />
-                      <div className="nudge-body">
+                      <div
+                        className="nudge-body nudge-body-clickable"
+                        onClick={() => {
+                          if (!graph) return
+                          const paraId = nudge.relatedParagraphs[0]
+                          const node = graph.nodes.find((n) => n.id === paraId)
+                          if (node) onNodeClick(node.paragraph)
+                        }}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            if (!graph) return
+                            const paraId = nudge.relatedParagraphs[0]
+                            const node = graph.nodes.find((n) => n.id === paraId)
+                            if (node) onNodeClick(node.paragraph)
+                          }
+                        }}
+                      >
                         <span className="nudge-type">
                           {nudgeTypeIcon(nudge.type)}
                           {nudgeTypeLabel(nudge.type)}
@@ -471,7 +486,10 @@ export default function IntentPanel({
                         <button
                           type="button"
                           className="nudge-action-btn nudge-action-handled"
-                          onClick={() => handleMissionHandled(i)}
+                          onClick={() => {
+                            const key = `${nudge.type}_${nudge.relatedParagraphs.join(',')}`
+                            handleMissionHandled(key)
+                          }}
                           aria-label="完成"
                           title="完成"
                         >
@@ -480,7 +498,10 @@ export default function IntentPanel({
                         <button
                           type="button"
                           className="nudge-action-btn nudge-action-skipped"
-                          onClick={() => handleMissionSkipped(i)}
+                          onClick={() => {
+                            const key = `${nudge.type}_${nudge.relatedParagraphs.join(',')}`
+                            handleMissionSkipped(key)
+                          }}
                           aria-label="跳过"
                           title="跳过"
                         >
@@ -519,11 +540,8 @@ export default function IntentPanel({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
         >
-          <div className="scan-progress-orbit">
-            <Loader2 className="spin" size={20} />
-          </div>
-          <h3>{stageLabel(scanStage) || '正在分析论证结构…'}</h3>
-          <p>AI 正在阅读你的文章，检测论点、论据和逻辑关系。</p>
+          <ChickenProgress stage={scanStage === 'preparing' ? 'reading' : scanStage === 'requesting' ? 'reasoning' : scanStage === 'parsing' ? 'polishing' : 'reading'} label={stageLabel(scanStage) || '正在分析论证结构…'} />
+          <p style={{ marginTop: 8 }}>AI 正在阅读你的文章，检测论点、论据和逻辑关系。</p>
         </motion.div>
       )}
     </div>

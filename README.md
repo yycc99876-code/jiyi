@@ -23,7 +23,7 @@ api/revision/analyze.ts
 
 ```text
 DASHSCOPE_API_KEY=你的阿里百炼 API Key
-DASHSCOPE_MODEL=qwen-plus
+DASHSCOPE_MODEL=qwen-turbo
 ```
 
 ## 部署

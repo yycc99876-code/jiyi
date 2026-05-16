@@ -763,9 +763,9 @@ function App() {
         return
       }
 
-      // Ctrl — hold to talk with combo detection
+      // Alt — hold to talk with combo detection
       // Start recognition immediately, cancel within 120ms if a combo key is detected
-      if (e.key === 'Control' && !e.altKey && !e.shiftKey) {
+      if (e.key === 'Alt' && !e.ctrlKey && !e.shiftKey) {
         if (isNonEditorInput(e.target)) return
         if (voiceModeRef.current !== 'idle') return
         ctrlComboDetected = false
@@ -787,7 +787,7 @@ function App() {
         }, 120)
       }
 
-      // Any non-modifier key while Ctrl is pending → mark as combo
+      // Any non-modifier key while Alt is pending → mark as combo
       if (ctrlPendingTimer && !e.key.startsWith('Shift') && !e.key.startsWith('Alt') && !e.key.startsWith('Control')) {
         ctrlComboDetected = true
       }
@@ -796,9 +796,9 @@ function App() {
     const onKeyUp = (e: KeyboardEvent) => {
       pressed.delete(e.code)
 
-      // Release Ctrl
-      if (e.key === 'Control') {
-        // Cancel pending timer if Ctrl released before timeout
+      // Release Alt
+      if (e.key === 'Alt') {
+        // Cancel pending timer if Alt released before timeout
         if (ctrlPendingTimer) {
           window.clearTimeout(ctrlPendingTimer)
           ctrlPendingTimer = 0
